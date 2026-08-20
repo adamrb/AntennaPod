@@ -92,7 +92,7 @@ public class MediaDownloadedHandler implements Runnable {
         final FeedItem item = media.getItem();
 
         if (item != null && UserPreferences.isAdDetectionEnabled()) {
-            AdSegmentDetectionPipeline.detectAsync(media);
+            AdSegmentDetectionPipeline.detectAsync(context, media);
         }
 
         try {

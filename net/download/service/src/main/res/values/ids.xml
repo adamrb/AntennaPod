@@ -3,4 +3,5 @@
     <item name="notification_updating_feeds" type="id"/>
     <item name="notification_download_report" type="id"/>
     <item name="notification_auto_download_report" type="id"/>
+    <item name="notification_ad_analysis" type="id"/>
 </resources>

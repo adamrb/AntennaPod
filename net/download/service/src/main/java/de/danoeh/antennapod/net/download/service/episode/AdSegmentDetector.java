@@ -20,19 +20,24 @@ public final class AdSegmentDetector {
     private static final long PROGRESS_TIMEOUT_MS = 20000;
     private static final long TOTAL_DEADLINE_MS = 10 * 60 * 1000;
 
+    public interface ProgressListener {
+        void onProgress(int percent);
+    }
+
     private AdSegmentDetector() {
     }
 
-    public static List<AdSegment> detect(String filePath) {
+    public static List<AdSegment> detect(String filePath, ProgressListener progressListener) {
         try {
-            return decodeAndAnalyze(filePath);
+            return decodeAndAnalyze(filePath, progressListener);
         } catch (Exception e) {
             Log.e(TAG, "Ad segment analysis failed for " + filePath, e);
             return new ArrayList<>();
         }
     }
 
-    private static List<AdSegment> decodeAndAnalyze(String filePath) throws IOException {
+    private static List<AdSegment> decodeAndAnalyze(String filePath, ProgressListener progressListener)
+            throws IOException {
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
         try {
@@ -52,6 +57,8 @@ public final class AdSegmentDetector {
                 return new ArrayList<>();
             }
             extractor.selectTrack(trackIndex);
+            long durationUs = format.containsKey(MediaFormat.KEY_DURATION)
+                    ? format.getLong(MediaFormat.KEY_DURATION) : 0;
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME));
             codec.configure(format, null, null, 0);
             codec.start();
@@ -62,6 +69,7 @@ public final class AdSegmentDetector {
             boolean outputDone = false;
             long startTime = System.currentTimeMillis();
             long lastProgressTime = startTime;
+            int lastReportedPercent = -1;
             while (!outputDone) {
                 if (Thread.currentThread().isInterrupted()) {
                     Log.w(TAG, "Analysis interrupted, aborting");
@@ -86,9 +94,16 @@ public final class AdSegmentDetector {
                                     MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                             inputDone = true;
                         } else {
-                            codec.queueInputBuffer(inputIndex, 0, sampleSize,
-                                    extractor.getSampleTime(), 0);
+                            long sampleTime = extractor.getSampleTime();
+                            codec.queueInputBuffer(inputIndex, 0, sampleSize, sampleTime, 0);
                             extractor.advance();
+                            if (progressListener != null && durationUs > 0) {
+                                int percent = (int) (100 * sampleTime / durationUs);
+                                if (percent != lastReportedPercent) {
+                                    lastReportedPercent = percent;
+                                    progressListener.onProgress(percent);
+                                }
+                            }
                         }
                         lastProgressTime = now;
                     }
