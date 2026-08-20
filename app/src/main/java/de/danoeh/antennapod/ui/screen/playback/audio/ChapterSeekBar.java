@@ -19,9 +19,11 @@ public class ChapterSeekBar extends androidx.appcompat.widget.AppCompatSeekBar {
     private float progressPrimary;
     private float progressSecondary;
     private float[] dividerPos;
+    private float[][] adSegmentPos;
     private boolean isHighlighted = false;
     private final Paint paintBackground = new Paint();
     private final Paint paintProgressPrimary = new Paint();
+    private final Paint paintAdSegment = new Paint();
 
     public ChapterSeekBar(Context context) {
         super(context);
@@ -46,6 +48,13 @@ public class ChapterSeekBar extends androidx.appcompat.widget.AppCompatSeekBar {
         paintBackground.setColor(ThemeUtils.getColorFromAttr(getContext(), R.attr.colorSurfaceVariant));
         paintBackground.setAlpha(128);
         paintProgressPrimary.setColor(ThemeUtils.getColorFromAttr(getContext(), R.attr.colorPrimary));
+        paintAdSegment.setColor(ThemeUtils.getColorFromAttr(getContext(), R.attr.colorError));
+        paintAdSegment.setAlpha(160);
+    }
+
+    public void setAdSegmentPos(final float[][] adSegmentPos) {
+        this.adSegmentPos = adSegmentPos;
+        invalidate();
     }
 
     /**
@@ -89,6 +98,7 @@ public class ChapterSeekBar extends androidx.appcompat.widget.AppCompatSeekBar {
         } else {
             drawProgressChapters(canvas);
         }
+        drawAdSegments(canvas);
         drawThumb(canvas);
     }
 
@@ -135,6 +145,18 @@ public class ChapterSeekBar extends androidx.appcompat.widget.AppCompatSeekBar {
             } else {
                 canvas.drawRect(leftCurr, top, progressPrimary, bottom, paintProgressPrimary);
             }
+        }
+        canvas.restoreToCount(saveCount);
+    }
+
+    private void drawAdSegments(Canvas canvas) {
+        if (adSegmentPos == null) {
+            return;
+        }
+        final int saveCount = canvas.save();
+        canvas.translate(getPaddingLeft(), getPaddingTop());
+        for (float[] segment : adSegmentPos) {
+            canvas.drawRect(segment[0] * width, top, segment[1] * width, bottom, paintAdSegment);
         }
         canvas.restoreToCount(saveCount);
     }

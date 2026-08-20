@@ -40,6 +40,23 @@
                 android:key="prefPlaybackSpeedLauncher"
                 android:summary="@string/pref_playback_speed_sum"
                 android:title="@string/playback_speed"/>
+        <SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:key="prefAdDetectionEnabled"
+                android:summary="@string/pref_ad_detection_sum"
+                android:title="@string/pref_ad_detection_title"/>
+        <SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:dependency="prefAdDetectionEnabled"
+                android:key="prefAdAutoSkip"
+                android:summary="@string/pref_ad_auto_skip_sum"
+                android:title="@string/pref_ad_auto_skip_title"/>
+        <SwitchPreferenceCompat
+                android:defaultValue="false"
+                android:dependency="prefAdDetectionEnabled"
+                android:key="prefAdForwardButtonSkipsSegment"
+                android:summary="@string/pref_ad_forward_skips_segment_sum"
+                android:title="@string/pref_ad_forward_skips_segment_title"/>
     </PreferenceCategory>
 
     <PreferenceCategory android:title="@string/reassign_hardware_buttons">

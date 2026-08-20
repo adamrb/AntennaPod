@@ -562,6 +562,13 @@
     <string name="pref_playback_time_respects_speed_sum">Displayed position and duration are adapted to playback speed</string>
     <string name="pref_fast_forward">Fast-forward skip time</string>
     <string name="pref_fast_forward_sum">Customize the number of seconds to jump forward when the fast-forward button is clicked</string>
+    <string name="pref_ad_detection_title">Detect ad segments</string>
+    <string name="pref_ad_detection_sum">Analyze downloaded episodes to detect likely ad segments</string>
+    <string name="pref_ad_auto_skip_title">Automatically skip ads</string>
+    <string name="pref_ad_auto_skip_sum">Skip detected ad segments during playback</string>
+    <string name="pref_ad_forward_skips_segment_title">Fast-forward skips ad segment</string>
+    <string name="pref_ad_forward_skips_segment_sum">When inside a detected ad segment, the fast-forward button jumps to the end of the segment instead of the usual number of seconds</string>
+    <string name="ad_segment_skipped">Skipped ad segment</string>
     <string name="pref_rewind">Rewind skip time</string>
     <string name="pref_rewind_sum">Customize the number of seconds to jump backwards when the rewind button is clicked</string>
     <string name="pref_expandNotify_title">High notification priority</string>

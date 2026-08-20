@@ -31,6 +31,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
+import de.danoeh.antennapod.model.feed.AdSegment;
 import de.danoeh.antennapod.model.feed.Chapter;
 import de.danoeh.antennapod.model.feed.Feed;
 import de.danoeh.antennapod.model.feed.FeedItem;
@@ -55,7 +56,7 @@ public class PodDBAdapter {
 
     private static final String TAG = "PodDBAdapter";
     public static final String DATABASE_NAME = "Antennapod.db";
-    public static final int VERSION = 3110000;
+    public static final int VERSION = 3120000;
 
     /**
      * Maximum number of arguments for IN-operator.
@@ -128,6 +129,8 @@ public class PodDBAdapter {
     public static final String KEY_STATE = "state";
     public static final String KEY_PODCASTINDEX_TRANSCRIPT_URL = "podcastindex_transcript_url";
     public static final String KEY_PODCASTINDEX_TRANSCRIPT_TYPE = "podcastindex_transcript_type";
+    public static final String KEY_END = "end_time";
+    public static final String KEY_CONFIDENCE = "confidence";
 
     // Table names
     public static final String TABLE_NAME_FEEDS = "Feeds";
@@ -138,6 +141,7 @@ public class PodDBAdapter {
     public static final String TABLE_NAME_QUEUE = "Queue";
     public static final String TABLE_NAME_SIMPLECHAPTERS = "SimpleChapters";
     public static final String TABLE_NAME_FAVORITES = "Favorites";
+    public static final String TABLE_NAME_AD_SEGMENTS = "AdSegments";
 
     // SQL Statements for creating new tables
     private static final String TABLE_PRIMARY_KEY = KEY_ID
@@ -222,6 +226,11 @@ public class PodDBAdapter {
             + " TEXT," + KEY_START + " INTEGER," + KEY_FEEDITEM + " INTEGER,"
             + KEY_LINK + " TEXT," + KEY_IMAGE_URL + " TEXT)";
 
+    static final String CREATE_TABLE_AD_SEGMENTS = "CREATE TABLE "
+            + TABLE_NAME_AD_SEGMENTS + " (" + TABLE_PRIMARY_KEY + KEY_START
+            + " INTEGER," + KEY_END + " INTEGER," + KEY_FEEDITEM + " INTEGER,"
+            + KEY_CONFIDENCE + " REAL)";
+
     // SQL Statements for creating indexes
     static final String CREATE_INDEX_FEEDITEMS_FEED = "CREATE INDEX "
             + TABLE_NAME_FEED_ITEMS + "_" + KEY_FEED + " ON " + TABLE_NAME_FEED_ITEMS + " ("
@@ -247,6 +256,10 @@ public class PodDBAdapter {
             + TABLE_NAME_SIMPLECHAPTERS + "_" + KEY_FEEDITEM + " ON " + TABLE_NAME_SIMPLECHAPTERS + " ("
             + KEY_FEEDITEM + ")";
 
+    static final String CREATE_INDEX_AD_SEGMENTS_FEEDITEM = "CREATE INDEX "
+            + TABLE_NAME_AD_SEGMENTS + "_" + KEY_FEEDITEM + " ON " + TABLE_NAME_AD_SEGMENTS + " ("
+            + KEY_FEEDITEM + ")";
+
     static final String CREATE_TABLE_FAVORITES = "CREATE TABLE "
             + TABLE_NAME_FAVORITES + "(" + KEY_ID + " INTEGER PRIMARY KEY,"
             + KEY_FEEDITEM + " INTEGER," + KEY_FEED + " INTEGER)";
@@ -261,7 +274,8 @@ public class PodDBAdapter {
             TABLE_NAME_DOWNLOAD_LOG,
             TABLE_NAME_QUEUE,
             TABLE_NAME_SIMPLECHAPTERS,
-            TABLE_NAME_FAVORITES
+            TABLE_NAME_FAVORITES,
+            TABLE_NAME_AD_SEGMENTS
     };
 
     public static final String SELECT_KEY_ITEM_ID = "item_id";
@@ -798,6 +812,19 @@ public class PodDBAdapter {
         }
     }
 
+    public void setAdSegments(long feedItemId, List<AdSegment> segments) {
+        db.delete(TABLE_NAME_AD_SEGMENTS, KEY_FEEDITEM + "=?", new String[]{String.valueOf(feedItemId)});
+        ContentValues values = new ContentValues();
+        for (AdSegment segment : segments) {
+            values.clear();
+            values.put(KEY_START, segment.getStart());
+            values.put(KEY_END, segment.getEnd());
+            values.put(KEY_FEEDITEM, feedItemId);
+            values.put(KEY_CONFIDENCE, segment.getConfidence());
+            segment.setId(db.insert(TABLE_NAME_AD_SEGMENTS, null, values));
+        }
+    }
+
     public void resetPagedFeedPage(Feed feed) {
         final String sql = "UPDATE " + TABLE_NAME_FEEDS
                 + " SET " + KEY_NEXT_PAGE_LINK + "=" + KEY_DOWNLOAD_URL
@@ -934,6 +961,7 @@ public class PodDBAdapter {
 
             db.beginTransactionNonExclusive();
             db.delete(TABLE_NAME_SIMPLECHAPTERS, KEY_FEEDITEM + " IN (" + itemIds + ")", null);
+            db.delete(TABLE_NAME_AD_SEGMENTS, KEY_FEEDITEM + " IN (" + itemIds + ")", null);
             db.delete(TABLE_NAME_DOWNLOAD_LOG, KEY_FEEDFILETYPE + "=" + FeedMedia.FEEDFILETYPE_FEEDMEDIA
                             + " AND " + KEY_FEEDFILE + " IN (" + mediaIds + ")", null);
             db.delete(TABLE_NAME_FEED_MEDIA, KEY_ID + " IN (" + mediaIds + ")", null);
@@ -1030,6 +1058,13 @@ public class PodDBAdapter {
                 + " FROM " + TABLE_NAME_FEED_ITEMS
                 + " WHERE " + KEY_ID + "=" + item.getId();
         return db.rawQuery(query, null);
+    }
+
+    public final Cursor getAdSegmentsOfFeedItemCursor(final long feedItemId) {
+        return db.query(TABLE_NAME_AD_SEGMENTS, null, KEY_FEEDITEM
+                        + "=?", new String[]{String.valueOf(feedItemId)}, null,
+                null, KEY_START + " ASC"
+        );
     }
 
     public final Cursor getSimpleChaptersOfFeedItemCursor(final FeedItem item) {
@@ -1575,6 +1610,7 @@ public class PodDBAdapter {
             db.execSQL(CREATE_TABLE_QUEUE);
             db.execSQL(CREATE_TABLE_SIMPLECHAPTERS);
             db.execSQL(CREATE_TABLE_FAVORITES);
+            db.execSQL(CREATE_TABLE_AD_SEGMENTS);
 
             db.execSQL(CREATE_INDEX_FEEDITEMS_FEED);
             db.execSQL(CREATE_INDEX_FEEDITEMS_PUBDATE);
@@ -1582,6 +1618,7 @@ public class PodDBAdapter {
             db.execSQL(CREATE_INDEX_FEEDMEDIA_FEEDITEM);
             db.execSQL(CREATE_INDEX_QUEUE_FEEDITEM);
             db.execSQL(CREATE_INDEX_SIMPLECHAPTERS_FEEDITEM);
+            db.execSQL(CREATE_INDEX_AD_SEGMENTS_FEEDITEM);
         }
 
         @Override

@@ -125,6 +125,9 @@ public abstract class UserPreferences {
     private static final String PREF_FAST_FORWARD_SECS = "prefFastForwardSecs";
     private static final String PREF_REWIND_SECS = "prefRewindSecs";
     private static final String PREF_QUEUE_LOCKED = "prefQueueLocked";
+    public static final String PREF_AD_DETECTION_ENABLED = "prefAdDetectionEnabled";
+    public static final String PREF_AD_AUTO_SKIP = "prefAdAutoSkip";
+    public static final String PREF_AD_FORWARD_BUTTON_SKIPS_SEGMENT = "prefAdForwardButtonSkipsSegment";
 
     // Experimental
     public static final int EPISODE_CLEANUP_QUEUE = -1;
@@ -581,6 +584,18 @@ public abstract class UserPreferences {
 
     public static int getFastForwardSecs() {
         return prefs.getInt(PREF_FAST_FORWARD_SECS, 30);
+    }
+
+    public static boolean isAdDetectionEnabled() {
+        return prefs.getBoolean(PREF_AD_DETECTION_ENABLED, false);
+    }
+
+    public static boolean isAdAutoSkipEnabled() {
+        return prefs.getBoolean(PREF_AD_AUTO_SKIP, false);
+    }
+
+    public static boolean isAdForwardButtonSkipsSegment() {
+        return prefs.getBoolean(PREF_AD_FORWARD_BUTTON_SKIPS_SEGMENT, false);
     }
 
     public static int getRewindSecs() {

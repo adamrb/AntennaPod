@@ -36,6 +36,7 @@ import de.danoeh.antennapod.event.playback.PlaybackPositionEvent;
 import de.danoeh.antennapod.event.playback.PlaybackServiceEvent;
 import de.danoeh.antennapod.event.playback.SleepTimerUpdatedEvent;
 import de.danoeh.antennapod.event.playback.SpeedChangedEvent;
+import de.danoeh.antennapod.model.feed.AdSegment;
 import de.danoeh.antennapod.model.feed.Chapter;
 import de.danoeh.antennapod.model.feed.FeedItem;
 import de.danoeh.antennapod.model.feed.FeedMedia;
@@ -77,7 +78,9 @@ import org.greenrobot.eventbus.ThreadMode;
 
 import java.util.Calendar;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public class Media3PlaybackService extends MediaLibraryService {
@@ -94,6 +97,9 @@ public class Media3PlaybackService extends MediaLibraryService {
     private Disposable queueLoaderDisposable;
     private long lastPositionSaveTime = 0;
     private SleepTimer sleepTimer;
+    private volatile List<AdSegment> adSegments;
+    private final Set<Long> autoSkippedAdSegments = new HashSet<>();
+    private Disposable adSegmentsLoaderDisposable;
     @Nullable
     private LoudnessEnhancer loudnessEnhancer = null;
     private float volumeAdaptionFactor = 1.0f;
@@ -166,6 +172,13 @@ public class Media3PlaybackService extends MediaLibraryService {
             public void seekForward() {
                 long duration = getDuration();
                 long target = getCurrentPosition() + UserPreferences.getFastForwardSecs() * 1000L;
+
+                if (UserPreferences.isAdForwardButtonSkipsSegment()) {
+                    AdSegment segment = AdSegment.getSegmentAtPosition(adSegments, getCurrentPosition());
+                    if (segment != null) {
+                        target = segment.getEnd();
+                    }
+                }
 
                 if (duration > 0 && target >= duration) {
                     handlePlaybackEnded();
@@ -390,6 +403,10 @@ public class Media3PlaybackService extends MediaLibraryService {
             queueLoaderDisposable.dispose();
             queueLoaderDisposable = null;
         }
+        if (adSegmentsLoaderDisposable != null) {
+            adSegmentsLoaderDisposable.dispose();
+            adSegmentsLoaderDisposable = null;
+        }
         saveCurrentPosition();
         if (loudnessEnhancer != null) {
             loudnessEnhancer.release();
@@ -437,6 +454,7 @@ public class Media3PlaybackService extends MediaLibraryService {
                                 if (SkipUtils.skipEndingIfNecessary(this, currentPlayable, position, duration, speed)) {
                                     player.seekTo(player.getDuration());
                                 }
+                                autoSkipAdIfNecessary(position);
                             }
                         }, error -> Log.e(TAG, "Position observer error", error));
     }
@@ -509,6 +527,7 @@ public class Media3PlaybackService extends MediaLibraryService {
     private void switchToPlayable(FeedMedia media) {
         currentPlayable = media;
         currentPlayable.onPlaybackStart();
+        loadAdSegments(media);
 
         float speed = PlaybackSpeedUtils.getCurrentPlaybackSpeed(currentPlayable);
         player.setPlaybackSpeed(speed);
@@ -522,6 +541,35 @@ public class Media3PlaybackService extends MediaLibraryService {
             applyVolumeAdaption(1.0f);
         }
         updatePlaybackPreferences();
+    }
+
+    private void loadAdSegments(FeedMedia media) {
+        adSegments = null;
+        autoSkippedAdSegments.clear();
+        if (media.getItem() == null || !UserPreferences.isAdDetectionEnabled()) {
+            return;
+        }
+        final long itemId = media.getItemId();
+        if (adSegmentsLoaderDisposable != null) {
+            adSegmentsLoaderDisposable.dispose();
+        }
+        adSegmentsLoaderDisposable = Maybe.fromCallable(() -> DBReader.loadAdSegmentsOfFeedItem(itemId))
+                .subscribeOn(Schedulers.io())
+                .subscribe(segments -> adSegments = segments,
+                        error -> Log.e(TAG, "Failed to load ad segments", error));
+    }
+
+    private void autoSkipAdIfNecessary(long position) {
+        if (!UserPreferences.isAdAutoSkipEnabled()) {
+            return;
+        }
+        AdSegment segment = AdSegment.getSegmentAtPosition(adSegments, position);
+        if (segment == null || autoSkippedAdSegments.contains(segment.getId())) {
+            return;
+        }
+        autoSkippedAdSegments.add(segment.getId());
+        player.seekTo(segment.getEnd());
+        EventBus.getDefault().post(new MessageEvent(getString(R.string.ad_segment_skipped)));
     }
 
     private void updatePlaybackPreferences() {

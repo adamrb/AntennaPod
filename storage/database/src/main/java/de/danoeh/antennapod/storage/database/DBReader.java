@@ -14,6 +14,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import de.danoeh.antennapod.model.feed.AdSegment;
 import de.danoeh.antennapod.model.feed.Chapter;
 import de.danoeh.antennapod.model.feed.Feed;
 import de.danoeh.antennapod.model.feed.FeedCounter;
@@ -25,6 +26,7 @@ import de.danoeh.antennapod.model.feed.FeedPreferences;
 import de.danoeh.antennapod.model.feed.SortOrder;
 import de.danoeh.antennapod.model.feed.SubscriptionsFilter;
 import de.danoeh.antennapod.model.download.DownloadResult;
+import de.danoeh.antennapod.storage.database.mapper.AdSegmentCursor;
 import de.danoeh.antennapod.storage.database.mapper.ChapterCursor;
 import de.danoeh.antennapod.storage.database.mapper.DownloadResultCursor;
 import de.danoeh.antennapod.storage.database.mapper.FeedCursor;
@@ -482,6 +484,24 @@ public final class DBReader {
                 chapters.add(cursor.getChapter());
             }
             return chapters;
+        } finally {
+            adapter.close();
+        }
+    }
+
+    @Nullable
+    public static synchronized List<AdSegment> loadAdSegmentsOfFeedItem(final long feedItemId) {
+        PodDBAdapter adapter = PodDBAdapter.getInstance();
+        adapter.open();
+        try (AdSegmentCursor cursor = new AdSegmentCursor(adapter.getAdSegmentsOfFeedItemCursor(feedItemId))) {
+            if (cursor.getCount() == 0) {
+                return null;
+            }
+            ArrayList<AdSegment> segments = new ArrayList<>();
+            while (cursor.moveToNext()) {
+                segments.add(cursor.getAdSegment());
+            }
+            return segments;
         } finally {
             adapter.close();
         }

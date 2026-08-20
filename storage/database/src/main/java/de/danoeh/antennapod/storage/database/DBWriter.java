@@ -43,6 +43,7 @@ import de.danoeh.antennapod.event.FeedEvent;
 import de.danoeh.antennapod.storage.preferences.PlaybackPreferences;
 import de.danoeh.antennapod.storage.preferences.UserPreferences;
 import de.danoeh.antennapod.model.download.DownloadResult;
+import de.danoeh.antennapod.model.feed.AdSegment;
 import de.danoeh.antennapod.model.feed.Feed;
 import de.danoeh.antennapod.model.feed.FeedItem;
 import de.danoeh.antennapod.model.feed.FeedMedia;
@@ -315,6 +316,15 @@ public class DBWriter {
             adapter.setFeedMediaLastPlayedTimeHistory(media);
             adapter.close();
             EventBus.getDefault().post(PlaybackHistoryEvent.listUpdated());
+        });
+    }
+
+    public static Future<?> setAdSegments(final long feedItemId, final List<AdSegment> segments) {
+        return runOnDbThread(() -> {
+            PodDBAdapter adapter = PodDBAdapter.getInstance();
+            adapter.open();
+            adapter.setAdSegments(feedItemId, segments);
+            adapter.close();
         });
     }
 

@@ -64,6 +64,7 @@ import de.danoeh.antennapod.event.playback.PlaybackServiceEvent;
 import de.danoeh.antennapod.event.playback.SleepTimerUpdatedEvent;
 import de.danoeh.antennapod.event.playback.SpeedChangedEvent;
 import de.danoeh.antennapod.ui.episodeslist.FeedItemMenuHandler;
+import de.danoeh.antennapod.model.feed.AdSegment;
 import de.danoeh.antennapod.model.feed.Chapter;
 import de.danoeh.antennapod.model.feed.FeedItem;
 import de.danoeh.antennapod.model.feed.FeedMedia;
@@ -102,6 +103,7 @@ public class AudioPlayerFragment extends Fragment implements
     private TextView txtvSeek;
 
     private FeedMedia currentMedia;
+    private List<AdSegment> adSegments;
     private Disposable disposable;
     private boolean showTimeLeft;
     private boolean seekedToChapterStart = false;
@@ -184,6 +186,20 @@ public class AudioPlayerFragment extends Fragment implements
         }
 
         sbPosition.setDividerPos(dividerPos);
+        setAdSegmentMarkers();
+    }
+
+    private void setAdSegmentMarkers() {
+        float[][] segmentPos = null;
+        int duration = currentMedia.getDuration();
+        if (adSegments != null && !adSegments.isEmpty() && duration > 0) {
+            segmentPos = new float[adSegments.size()][2];
+            for (int i = 0; i < adSegments.size(); i++) {
+                segmentPos[i][0] = adSegments.get(i).getStart() / (float) duration;
+                segmentPos[i][1] = adSegments.get(i).getEnd() / (float) duration;
+            }
+        }
+        sbPosition.setAdSegmentPos(segmentPos);
     }
 
     private void setupControlButtons() {
@@ -291,6 +307,8 @@ public class AudioPlayerFragment extends Fragment implements
                 if (includingChapters) {
                     ChapterUtils.loadChapters(media, getContext(), false);
                 }
+                adSegments = UserPreferences.isAdDetectionEnabled()
+                        ? DBReader.loadAdSegmentsOfFeedItem(media.getItemId()) : null;
                 emitter.onSuccess(media);
             } else {
                 emitter.onComplete();
