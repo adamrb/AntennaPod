@@ -36,6 +36,8 @@ public class AdSegmentAnalyzer {
     private int windowFrameCount = 0;
     private boolean hasPreviousMagnitude = false;
     private double effectiveSampleRate = TARGET_SAMPLE_RATE;
+    private long skipUs = 0;
+    private long skipFramesRemaining = 0;
 
     public AdSegmentAnalyzer() {
         for (int i = 0; i < FRAME_SIZE; i++) {
@@ -43,12 +45,32 @@ public class AdSegmentAnalyzer {
         }
     }
 
+    public void setSkipUs(long skipUs) {
+        this.skipUs = skipUs;
+    }
+
     public void addPcm(ShortBuffer samples, int channels, int sampleRate) {
         decimFactor = Math.max(1, Math.round((float) sampleRate / TARGET_SAMPLE_RATE));
         effectiveSampleRate = (double) sampleRate / decimFactor;
+        if (skipUs > 0) {
+            skipFramesRemaining = skipUs * sampleRate / 1000000;
+            skipUs = 0;
+        }
         short[] data = new short[samples.remaining()];
         samples.get(data);
         int frames = data.length / channels;
+        if (skipFramesRemaining > 0) {
+            if (skipFramesRemaining >= frames) {
+                skipFramesRemaining -= frames;
+                return;
+            }
+            int offset = (int) skipFramesRemaining * channels;
+            short[] remaining = new short[data.length - offset];
+            System.arraycopy(data, offset, remaining, 0, remaining.length);
+            data = remaining;
+            frames = data.length / channels;
+            skipFramesRemaining = 0;
+        }
         double scale = channels * 32768.0;
         for (int i = 0; i < frames; i++) {
             double mono = 0;
@@ -72,6 +94,21 @@ public class AdSegmentAnalyzer {
             return new ArrayList<>();
         }
         return findSegments(windows, windowMs);
+    }
+
+    public List<double[]> getWindows() {
+        return windows;
+    }
+
+    public double getWindowMs() {
+        return 1000.0 * FRAME_SIZE * FRAMES_PER_WINDOW / effectiveSampleRate;
+    }
+
+    public static List<AdSegment> getSegments(List<double[]> mergedWindows, double windowMs) {
+        if (mergedWindows.size() * windowMs < MIN_EPISODE_MS) {
+            return new ArrayList<>();
+        }
+        return findSegments(mergedWindows, windowMs);
     }
 
     static List<AdSegment> findSegments(List<double[]> windows, double windowMs) {
