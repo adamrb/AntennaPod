@@ -11,12 +11,12 @@ public class AdSegmentAnalyzer {
     public static final int TARGET_SAMPLE_RATE = 16000;
     static final int FRAME_SIZE = 1024;
     static final int FRAMES_PER_WINDOW = 16;
-    static final long WINDOW_MS = 1000L * FRAME_SIZE * FRAMES_PER_WINDOW / TARGET_SAMPLE_RATE;
     static final long MIN_SEGMENT_MS = 15000;
     static final long MAX_SEGMENT_MS = 300000;
     static final long MERGE_GAP_MS = 120000;
     static final long MIN_EPISODE_MS = 5 * 60 * 1000;
     static final double SCORE_THRESHOLD = 1.2;
+    static final double MERGE_GAP_SCORE = 0.75 * SCORE_THRESHOLD;
     static final int SMOOTH_WINDOWS = 15;
 
     private final List<double[]> windows = new ArrayList<>();
@@ -36,6 +36,7 @@ public class AdSegmentAnalyzer {
     private double windowFlux = 0;
     private int windowFrameCount = 0;
     private boolean hasPreviousMagnitude = false;
+    private double effectiveSampleRate = TARGET_SAMPLE_RATE;
 
     public AdSegmentAnalyzer() {
         for (int i = 0; i < FRAME_SIZE; i++) {
@@ -45,6 +46,7 @@ public class AdSegmentAnalyzer {
 
     public void addPcm(ShortBuffer samples, int channels, int sampleRate) {
         decimFactor = Math.max(1, Math.round((float) sampleRate / TARGET_SAMPLE_RATE));
+        effectiveSampleRate = (double) sampleRate / decimFactor;
         int frames = samples.remaining() / channels;
         for (int i = 0; i < frames; i++) {
             double mono = 0;
@@ -63,13 +65,14 @@ public class AdSegmentAnalyzer {
     }
 
     public List<AdSegment> getSegments() {
-        if (windows.size() * WINDOW_MS < MIN_EPISODE_MS) {
+        double windowMs = 1000.0 * FRAME_SIZE * FRAMES_PER_WINDOW / effectiveSampleRate;
+        if (windows.size() * windowMs < MIN_EPISODE_MS) {
             return new ArrayList<>();
         }
-        return findSegments(windows);
+        return findSegments(windows, windowMs);
     }
 
-    static List<AdSegment> findSegments(List<double[]> windows) {
+    static List<AdSegment> findSegments(List<double[]> windows, double windowMs) {
         int numWindows = windows.size();
         int numFeatures = windows.get(0).length;
         double[] scores = new double[numWindows];
@@ -108,7 +111,7 @@ public class AdSegmentAnalyzer {
             adLike[w] = smoothed[w] > SCORE_THRESHOLD;
         }
 
-        List<AdSegment> segments = new ArrayList<>();
+        List<int[]> runs = new ArrayList<>();
         int runStart = -1;
         for (int w = 0; w <= numWindows; w++) {
             if (w < numWindows && adLike[w]) {
@@ -116,24 +119,25 @@ public class AdSegmentAnalyzer {
                     runStart = w;
                 }
             } else if (runStart >= 0) {
-                segments.add(makeSegment(runStart, w, smoothed));
+                runs.add(new int[]{runStart, w});
                 runStart = -1;
             }
         }
 
-        List<AdSegment> merged = new ArrayList<>();
-        for (AdSegment segment : segments) {
-            AdSegment last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
-            if (last != null && segment.getStart() - last.getEnd() <= MERGE_GAP_MS) {
-                last.setEnd(segment.getEnd());
-                last.setConfidence(Math.max(last.getConfidence(), segment.getConfidence()));
+        List<int[]> merged = new ArrayList<>();
+        for (int[] run : runs) {
+            int[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
+            if (last != null && (run[0] - last[1]) * windowMs <= MERGE_GAP_MS
+                    && gapScoreStaysElevated(smoothed, last[1], run[0])) {
+                last[1] = run[1];
             } else {
-                merged.add(segment);
+                merged.add(run);
             }
         }
 
         List<AdSegment> result = new ArrayList<>();
-        for (AdSegment segment : merged) {
+        for (int[] run : merged) {
+            AdSegment segment = makeSegment(run[0], run[1], smoothed, windowMs);
             long length = segment.getEnd() - segment.getStart();
             if (length >= MIN_SEGMENT_MS && length <= MAX_SEGMENT_MS) {
                 result.add(segment);
@@ -142,14 +146,23 @@ public class AdSegmentAnalyzer {
         return result;
     }
 
-    private static AdSegment makeSegment(int startWindow, int endWindow, double[] scores) {
+    private static boolean gapScoreStaysElevated(double[] smoothed, int gapStart, int gapEnd) {
+        for (int w = gapStart; w < gapEnd; w++) {
+            if (smoothed[w] < MERGE_GAP_SCORE) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static AdSegment makeSegment(int startWindow, int endWindow, double[] scores, double windowMs) {
         double sum = 0;
         for (int w = startWindow; w < endWindow; w++) {
             sum += scores[w];
         }
         double meanScore = sum / (endWindow - startWindow);
         float confidence = (float) Math.min(1.0, meanScore / (2 * SCORE_THRESHOLD));
-        return new AdSegment(startWindow * WINDOW_MS, endWindow * WINDOW_MS, confidence);
+        return new AdSegment((long) (startWindow * windowMs), (long) (endWindow * windowMs), confidence);
     }
 
     private static double median(double[] values) {

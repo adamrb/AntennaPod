@@ -813,15 +813,23 @@ public class PodDBAdapter {
     }
 
     public void setAdSegments(long feedItemId, List<AdSegment> segments) {
-        db.delete(TABLE_NAME_AD_SEGMENTS, KEY_FEEDITEM + "=?", new String[]{String.valueOf(feedItemId)});
-        ContentValues values = new ContentValues();
-        for (AdSegment segment : segments) {
-            values.clear();
-            values.put(KEY_START, segment.getStart());
-            values.put(KEY_END, segment.getEnd());
-            values.put(KEY_FEEDITEM, feedItemId);
-            values.put(KEY_CONFIDENCE, segment.getConfidence());
-            segment.setId(db.insert(TABLE_NAME_AD_SEGMENTS, null, values));
+        try {
+            db.beginTransactionNonExclusive();
+            db.delete(TABLE_NAME_AD_SEGMENTS, KEY_FEEDITEM + "=?", new String[]{String.valueOf(feedItemId)});
+            ContentValues values = new ContentValues();
+            for (AdSegment segment : segments) {
+                values.clear();
+                values.put(KEY_START, segment.getStart());
+                values.put(KEY_END, segment.getEnd());
+                values.put(KEY_FEEDITEM, feedItemId);
+                values.put(KEY_CONFIDENCE, segment.getConfidence());
+                segment.setId(db.insertOrThrow(TABLE_NAME_AD_SEGMENTS, null, values));
+            }
+            db.setTransactionSuccessful();
+        } catch (SQLException e) {
+            Log.e(TAG, Log.getStackTraceString(e));
+        } finally {
+            db.endTransaction();
         }
     }
 

@@ -1,5 +1,6 @@
 package de.danoeh.antennapod.net.download.service.episode;
 
+import android.media.AudioFormat;
 import android.media.MediaCodec;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
@@ -82,6 +83,12 @@ public final class AdSegmentDetector {
                     if (info.size > 0) {
                         ByteBuffer outputBuffer = codec.getOutputBuffer(outputIndex);
                         MediaFormat outputFormat = codec.getOutputFormat(outputIndex);
+                        if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)
+                                && outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
+                                        != AudioFormat.ENCODING_PCM_16BIT) {
+                            Log.w(TAG, "Unsupported PCM encoding, skipping analysis");
+                            return new ArrayList<>();
+                        }
                         int channels = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
                         int sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
                         outputBuffer.position(info.offset);

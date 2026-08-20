@@ -73,6 +73,22 @@ public class AdSegmentAnalyzerTest {
     }
 
     @Test
+    public void testTimestampsAccurateAt44100Hz() {
+        AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
+        analyzer.addPcm(ShortBuffer.wrap(synthSpeech(300, 44100, 1)), 1, 44100);
+        analyzer.addPcm(ShortBuffer.wrap(synthMusic(60, 44100, 1)), 1, 44100);
+        analyzer.addPcm(ShortBuffer.wrap(synthSpeech(300, 44100, 1)), 1, 44100);
+        List<AdSegment> segments = analyzer.getSegments();
+
+        assertEquals(1, segments.size());
+        AdSegment segment = segments.get(0);
+        assertTrue("segment " + segment + " should cover the ad",
+                segment.getStart() <= 310_000 && segment.getEnd() >= 350_000);
+        assertTrue("start " + segment.getStart(), segment.getStart() > 240_000);
+        assertTrue("end " + segment.getEnd(), segment.getEnd() < 420_000);
+    }
+
+    @Test
     public void testStereoAndHighSampleRateInput() {
         AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
         addSpeechStereo48k(analyzer, 300);

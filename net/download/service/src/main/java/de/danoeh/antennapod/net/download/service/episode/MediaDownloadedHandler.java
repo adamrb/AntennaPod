@@ -94,7 +94,7 @@ public class MediaDownloadedHandler implements Runnable {
         final FeedItem item = media.getItem();
 
         if (item != null && UserPreferences.isAdDetectionEnabled()) {
-            List<AdSegment> segments = AdSegmentDetector.detect(media.getLocalFileUrl());
+            List<AdSegment> segments = AdSegmentDetectionPipeline.detect(media);
             DBWriter.setAdSegments(item.getId(), segments);
         }
 
