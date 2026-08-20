@@ -71,15 +71,18 @@ public final class AdSegmentDetector {
             extractor.selectTrack(trackIndex);
             long durationUs = format.containsKey(MediaFormat.KEY_DURATION)
                     ? format.getLong(MediaFormat.KEY_DURATION) : 0;
+            boolean batchInput = "audio/mpeg".equals(format.getString(MediaFormat.KEY_MIME));
             trace(trace, "Audio track: " + format.getString(MediaFormat.KEY_MIME)
                     + ", duration " + durationUs / 1000000 + "s");
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME));
+            format.setInteger(MediaFormat.KEY_PRIORITY, 1);
             codec.configure(format, null, null, 0);
             codec.start();
             trace(trace, "Codec: " + codec.getName());
 
             AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+            MediaFormat outputFormat = codec.getOutputFormat();
             boolean inputDone = false;
             boolean outputDone = false;
             long startTime = System.currentTimeMillis();
@@ -102,40 +105,59 @@ public final class AdSegmentDetector {
                     trace(trace, "ABORT: exceeded total deadline");
                     return new ArrayList<>();
                 }
-                if (!inputDone) {
-                    int inputIndex = codec.dequeueInputBuffer(CODEC_TIMEOUT_US);
-                    if (inputIndex >= 0) {
-                        ByteBuffer inputBuffer = codec.getInputBuffer(inputIndex);
-                        int sampleSize = extractor.readSampleData(inputBuffer, 0);
+                boolean progressed = false;
+                while (!inputDone) {
+                    int inputIndex = codec.dequeueInputBuffer(0);
+                    if (inputIndex < 0) {
+                        break;
+                    }
+                    progressed = true;
+                    ByteBuffer inputBuffer = codec.getInputBuffer(inputIndex);
+                    int totalSize = 0;
+                    long sampleTime = -1;
+                    while (true) {
+                        int sampleSize = extractor.readSampleData(inputBuffer, totalSize);
                         if (sampleSize < 0) {
-                            codec.queueInputBuffer(inputIndex, 0, 0, 0,
-                                    MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-                            inputDone = true;
-                        } else {
-                            long sampleTime = extractor.getSampleTime();
-                            codec.queueInputBuffer(inputIndex, 0, sampleSize, sampleTime, 0);
-                            extractor.advance();
-                            if (progressListener != null && durationUs > 0) {
-                                int percent = (int) (100 * sampleTime / durationUs);
-                                if (percent != lastReportedPercent) {
-                                    lastReportedPercent = percent;
-                                    progressListener.onProgress(percent);
-                                }
+                            break;
+                        }
+                        if (sampleTime < 0) {
+                            sampleTime = extractor.getSampleTime();
+                        }
+                        totalSize += sampleSize;
+                        extractor.advance();
+                        if (!batchInput || inputBuffer.capacity() - totalSize < 4096) {
+                            break;
+                        }
+                    }
+                    if (totalSize == 0) {
+                        codec.queueInputBuffer(inputIndex, 0, 0, 0,
+                                MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+                        inputDone = true;
+                    } else {
+                        codec.queueInputBuffer(inputIndex, 0, totalSize, sampleTime, 0);
+                        if (progressListener != null && durationUs > 0) {
+                            int percent = (int) (100 * sampleTime / durationUs);
+                            if (percent != lastReportedPercent) {
+                                lastReportedPercent = percent;
+                                progressListener.onProgress(percent);
                             }
                         }
-                        lastProgressTime = now;
                     }
                 }
-                int outputIndex = codec.dequeueOutputBuffer(info, CODEC_TIMEOUT_US);
-                if (outputIndex >= 0) {
-                    lastProgressTime = now;
+                int outputIndex = codec.dequeueOutputBuffer(info, progressed ? 0 : CODEC_TIMEOUT_US);
+                while (outputIndex >= 0 || outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    progressed = true;
+                    if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        outputFormat = codec.getOutputFormat();
+                        outputIndex = codec.dequeueOutputBuffer(info, 0);
+                        continue;
+                    }
                     if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         outputDone = true;
                     }
                     boolean unsupportedEncoding = false;
                     if (info.size > 0) {
                         ByteBuffer outputBuffer = codec.getOutputBuffer(outputIndex);
-                        MediaFormat outputFormat = codec.getOutputFormat(outputIndex);
                         if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)
                                 && outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
                                         != AudioFormat.ENCODING_PCM_16BIT) {
@@ -155,6 +177,13 @@ public final class AdSegmentDetector {
                         trace(trace, "ABORT: unsupported PCM encoding (not 16-bit)");
                         return new ArrayList<>();
                     }
+                    if (outputDone) {
+                        break;
+                    }
+                    outputIndex = codec.dequeueOutputBuffer(info, 0);
+                }
+                if (progressed) {
+                    lastProgressTime = now;
                 }
             }
             List<AdSegment> segments = analyzer.getSegments();

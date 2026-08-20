@@ -46,14 +46,17 @@ public class AdSegmentAnalyzer {
     public void addPcm(ShortBuffer samples, int channels, int sampleRate) {
         decimFactor = Math.max(1, Math.round((float) sampleRate / TARGET_SAMPLE_RATE));
         effectiveSampleRate = (double) sampleRate / decimFactor;
-        int frames = samples.remaining() / channels;
+        short[] data = new short[samples.remaining()];
+        samples.get(data);
+        int frames = data.length / channels;
+        double scale = channels * 32768.0;
         for (int i = 0; i < frames; i++) {
             double mono = 0;
+            int base = i * channels;
             for (int c = 0; c < channels; c++) {
-                mono += samples.get(i * channels + c);
+                mono += data[base + c];
             }
-            mono /= channels * 32768.0;
-            decimBuffer += mono;
+            decimBuffer += mono / scale;
             decimCount++;
             if (decimCount >= decimFactor) {
                 pushSample((float) (decimBuffer / decimCount));
