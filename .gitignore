@@ -33,3 +33,4 @@ gradle.properties
 .kotlin
 .claude
 .cursor
+net/download/service/src/test/fixtures/
