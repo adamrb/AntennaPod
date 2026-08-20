@@ -5,7 +5,6 @@ import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
-import android.os.Build;
 import android.util.Log;
 
 import java.io.IOException;
@@ -37,9 +36,9 @@ public final class AdSegmentDetector {
         try {
             return decodeAndAnalyze(filePath, progressListener, trace, true);
         } catch (MediaCodec.CodecException e) {
-            Log.w(TAG, "Codec rejected batched input, retrying without batching", e);
-            trace(trace, "Codec error with batched input (" + describeCodecException(e)
-                    + "), retrying without batching");
+            Log.w(TAG, "Codec failed in fast mode, retrying with conservative decode loop", e);
+            trace(trace, "Codec error in fast mode (" + describeCodecException(e)
+                    + "), retrying with conservative decode loop");
             try {
                 return decodeAndAnalyze(filePath, progressListener, trace, false);
             } catch (Exception retryException) {
@@ -73,7 +72,7 @@ public final class AdSegmentDetector {
     }
 
     private static List<AdSegment> decodeAndAnalyze(String filePath, ProgressListener progressListener,
-            StringBuilder trace, boolean allowBatching) throws IOException {
+            StringBuilder trace, boolean fastMode) throws IOException {
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
         try {
@@ -99,9 +98,7 @@ public final class AdSegmentDetector {
             String mime = format.getString(MediaFormat.KEY_MIME);
             trace(trace, "Audio track: " + mime + ", duration " + durationUs / 1000000 + "s");
             codec = MediaCodec.createDecoderByType(mime);
-            format.setInteger(MediaFormat.KEY_PRIORITY, 1);
-            boolean batchInput = allowBatching && "audio/mpeg".equals(mime)
-                    && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
+            boolean batchInput = fastMode && "audio/mpeg".equals(mime);
             if (batchInput) {
                 try {
                     batchInput = codec.getCodecInfo().getCapabilitiesForType(mime)
@@ -115,11 +112,12 @@ public final class AdSegmentDetector {
             }
             codec.configure(format, null, null, 0);
             codec.start();
-            trace(trace, "Codec: " + codec.getName() + ", batched input: " + batchInput);
+            trace(trace, "Codec: " + codec.getName() + ", fast mode: " + fastMode
+                    + ", batched input: " + batchInput);
 
             AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-            MediaFormat outputFormat = codec.getOutputFormat();
+            MediaFormat cachedOutputFormat = null;
             boolean inputDone = false;
             boolean outputDone = false;
             long startTime = System.currentTimeMillis();
@@ -144,7 +142,7 @@ public final class AdSegmentDetector {
                 }
                 boolean progressed = false;
                 while (!inputDone) {
-                    int inputIndex = codec.dequeueInputBuffer(0);
+                    int inputIndex = codec.dequeueInputBuffer(fastMode ? 0 : CODEC_TIMEOUT_US);
                     if (inputIndex < 0) {
                         break;
                     }
@@ -180,12 +178,15 @@ public final class AdSegmentDetector {
                             }
                         }
                     }
+                    if (!fastMode) {
+                        break;
+                    }
                 }
-                int outputIndex = codec.dequeueOutputBuffer(info, progressed ? 0 : CODEC_TIMEOUT_US);
+                int outputIndex = codec.dequeueOutputBuffer(info, progressed && fastMode ? 0 : CODEC_TIMEOUT_US);
                 while (outputIndex >= 0 || outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     progressed = true;
                     if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                        outputFormat = codec.getOutputFormat();
+                        cachedOutputFormat = codec.getOutputFormat();
                         outputIndex = codec.dequeueOutputBuffer(info, 0);
                         continue;
                     }
@@ -195,6 +196,8 @@ public final class AdSegmentDetector {
                     boolean unsupportedEncoding = false;
                     if (info.size > 0) {
                         ByteBuffer outputBuffer = codec.getOutputBuffer(outputIndex);
+                        MediaFormat outputFormat = cachedOutputFormat != null
+                                ? cachedOutputFormat : codec.getOutputFormat(outputIndex);
                         if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)
                                 && outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
                                         != AudioFormat.ENCODING_PCM_16BIT) {
@@ -214,7 +217,7 @@ public final class AdSegmentDetector {
                         trace(trace, "ABORT: unsupported PCM encoding (not 16-bit)");
                         return new ArrayList<>();
                     }
-                    if (outputDone) {
+                    if (outputDone || !fastMode) {
                         break;
                     }
                     outputIndex = codec.dequeueOutputBuffer(info, 0);
