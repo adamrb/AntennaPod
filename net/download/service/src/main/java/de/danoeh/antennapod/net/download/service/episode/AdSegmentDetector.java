@@ -2,8 +2,10 @@ package de.danoeh.antennapod.net.download.service.episode;
 
 import android.media.AudioFormat;
 import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
+import android.os.Build;
 import android.util.Log;
 
 import java.io.IOException;
@@ -33,12 +35,35 @@ public final class AdSegmentDetector {
 
     public static List<AdSegment> detect(String filePath, ProgressListener progressListener, StringBuilder trace) {
         try {
-            return decodeAndAnalyze(filePath, progressListener, trace);
+            return decodeAndAnalyze(filePath, progressListener, trace, true);
+        } catch (MediaCodec.CodecException e) {
+            Log.w(TAG, "Codec rejected batched input, retrying without batching", e);
+            trace(trace, "Codec error with batched input (" + describeCodecException(e)
+                    + "), retrying without batching");
+            try {
+                return decodeAndAnalyze(filePath, progressListener, trace, false);
+            } catch (Exception retryException) {
+                Log.e(TAG, "Ad segment analysis failed for " + filePath, retryException);
+                trace(trace, "EXCEPTION: " + describeException(retryException));
+                return new ArrayList<>();
+            }
         } catch (Exception e) {
             Log.e(TAG, "Ad segment analysis failed for " + filePath, e);
-            trace(trace, "EXCEPTION: " + e);
+            trace(trace, "EXCEPTION: " + describeException(e));
             return new ArrayList<>();
         }
+    }
+
+    private static String describeException(Exception e) {
+        if (e instanceof MediaCodec.CodecException) {
+            return describeCodecException((MediaCodec.CodecException) e);
+        }
+        return e.toString();
+    }
+
+    private static String describeCodecException(MediaCodec.CodecException e) {
+        return e + " diagnostic=" + e.getDiagnosticInfo()
+                + " recoverable=" + e.isRecoverable() + " transient=" + e.isTransient();
     }
 
     private static void trace(StringBuilder trace, String message) {
@@ -48,7 +73,7 @@ public final class AdSegmentDetector {
     }
 
     private static List<AdSegment> decodeAndAnalyze(String filePath, ProgressListener progressListener,
-            StringBuilder trace) throws IOException {
+            StringBuilder trace, boolean allowBatching) throws IOException {
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
         try {
@@ -71,14 +96,26 @@ public final class AdSegmentDetector {
             extractor.selectTrack(trackIndex);
             long durationUs = format.containsKey(MediaFormat.KEY_DURATION)
                     ? format.getLong(MediaFormat.KEY_DURATION) : 0;
-            boolean batchInput = "audio/mpeg".equals(format.getString(MediaFormat.KEY_MIME));
-            trace(trace, "Audio track: " + format.getString(MediaFormat.KEY_MIME)
-                    + ", duration " + durationUs / 1000000 + "s");
-            codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME));
+            String mime = format.getString(MediaFormat.KEY_MIME);
+            trace(trace, "Audio track: " + mime + ", duration " + durationUs / 1000000 + "s");
+            codec = MediaCodec.createDecoderByType(mime);
             format.setInteger(MediaFormat.KEY_PRIORITY, 1);
+            boolean batchInput = allowBatching && "audio/mpeg".equals(mime)
+                    && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O;
+            if (batchInput) {
+                try {
+                    batchInput = codec.getCodecInfo().getCapabilitiesForType(mime)
+                            .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_MultipleFrames);
+                } catch (IllegalArgumentException e) {
+                    batchInput = false;
+                }
+            }
+            if (batchInput) {
+                format.setFeatureEnabled(MediaCodecInfo.CodecCapabilities.FEATURE_MultipleFrames, true);
+            }
             codec.configure(format, null, null, 0);
             codec.start();
-            trace(trace, "Codec: " + codec.getName());
+            trace(trace, "Codec: " + codec.getName() + ", batched input: " + batchInput);
 
             AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
