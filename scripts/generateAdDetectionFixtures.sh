@@ -26,6 +26,7 @@ CONTENT_OFFSET="$2"
 AD_SRC="$3"
 AD_OFFSET="$4"
 OUT_DIR="$5"
+AD_OFFSET2="${6:-$((AD_OFFSET + 70))}"
 
 mkdir -p "$OUT_DIR"
 TMP=$(mktemp -d)
@@ -52,7 +53,7 @@ wav "$CONTENT_SRC" "$CONTENT_OFFSET" 600 "$TMP/content_a.wav"
 wav "$CONTENT_SRC" $((CONTENT_OFFSET + 700)) 600 "$TMP/content_b.wav"
 wav "$CONTENT_SRC" $((CONTENT_OFFSET + 1400)) 600 "$TMP/content_c.wav"
 wav "$AD_SRC" "$AD_OFFSET" 60 "$TMP/ad_60.wav"
-wav "$AD_SRC" $((AD_OFFSET + 70)) 30 "$TMP/ad_30.wav"
+wav "$AD_SRC" "$AD_OFFSET2" 30 "$TMP/ad_30.wav"
 
 echo "Composing fixtures..."
 # Fixture 1: content(600s) + ad(60s) + content(600s)  -> ad at 600-660

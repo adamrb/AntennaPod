@@ -11,13 +11,12 @@ public class AdSegmentAnalyzer {
     public static final int TARGET_SAMPLE_RATE = 16000;
     static final int FRAME_SIZE = 1024;
     static final int FRAMES_PER_WINDOW = 16;
-    static final long MIN_SEGMENT_MS = 15000;
-    static final long MAX_SEGMENT_MS = 300000;
-    static final long MERGE_GAP_MS = 120000;
+    static final long MIN_SEGMENT_MS = 20000;
+    static final long MAX_SEGMENT_MS = 240000;
     static final long MIN_EPISODE_MS = 5 * 60 * 1000;
-    static final double SCORE_THRESHOLD = 1.2;
-    static final double MERGE_GAP_SCORE = 0.75 * SCORE_THRESHOLD;
-    static final int SMOOTH_WINDOWS = 15;
+    static final double BOUNDARY_THRESHOLD = 1.3;
+    static final double DISTINCTNESS_THRESHOLD = 0.7;
+    static final long MERGE_ADJACENT_MS = 10000;
 
     private final List<double[]> windows = new ArrayList<>();
     private final float[] frame = new float[FRAME_SIZE];
@@ -75,7 +74,7 @@ public class AdSegmentAnalyzer {
     static List<AdSegment> findSegments(List<double[]> windows, double windowMs) {
         int numWindows = windows.size();
         int numFeatures = windows.get(0).length;
-        double[] scores = new double[numWindows];
+        double[][] zScores = new double[numWindows][numFeatures];
         for (int f = 0; f < numFeatures; f++) {
             double[] values = new double[numWindows];
             for (int w = 0; w < numWindows; w++) {
@@ -86,19 +85,26 @@ public class AdSegmentAnalyzer {
             for (int w = 0; w < numWindows; w++) {
                 deviations[w] = Math.abs(values[w] - median);
             }
-            double mad = median(deviations.clone());
+            double mad = median(deviations.clone()) * 1.4826;
             if (mad < 1e-9) {
-                continue;
+                mad = 1;
             }
             for (int w = 0; w < numWindows; w++) {
-                scores[w] += Math.min(6, deviations[w] / (mad * 1.4826)) / numFeatures;
+                zScores[w][f] = (values[w] - median) / mad;
             }
         }
-
+        double[] scores = new double[numWindows];
+        for (int w = 0; w < numWindows; w++) {
+            double sum = 0;
+            for (int f = 0; f < numFeatures; f++) {
+                sum += Math.min(6, Math.abs(zScores[w][f]));
+            }
+            scores[w] = sum / numFeatures;
+        }
         double[] smoothed = new double[numWindows];
         for (int i = 0; i < numWindows; i++) {
-            int lo = Math.max(0, i - SMOOTH_WINDOWS / 2);
-            int hi = Math.min(numWindows - 1, i + SMOOTH_WINDOWS / 2);
+            int lo = Math.max(0, i - 1);
+            int hi = Math.min(numWindows - 1, i + 1);
             double sum = 0;
             for (int j = lo; j <= hi; j++) {
                 sum += scores[j];
@@ -106,63 +112,134 @@ public class AdSegmentAnalyzer {
             smoothed[i] = sum / (hi - lo + 1);
         }
 
-        boolean[] adLike = new boolean[numWindows];
-        for (int w = 0; w < numWindows; w++) {
-            adLike[w] = smoothed[w] > SCORE_THRESHOLD;
-        }
+        List<Integer> boundaries = findBoundaryCandidates(smoothed);
+        List<double[]> candidates = pairBoundaries(boundaries, smoothed, zScores, numFeatures, windowMs);
+        addSustainedRunCandidates(candidates, smoothed, zScores, numFeatures, windowMs);
+        return selectSegments(candidates, windowMs);
+    }
 
-        List<int[]> runs = new ArrayList<>();
+    private static void addSustainedRunCandidates(List<double[]> candidates, double[] smoothed,
+            double[][] zScores, int numFeatures, double windowMs) {
+        int numWindows = smoothed.length;
         int runStart = -1;
         for (int w = 0; w <= numWindows; w++) {
-            if (w < numWindows && adLike[w]) {
+            if (w < numWindows && smoothed[w] > BOUNDARY_THRESHOLD) {
                 if (runStart < 0) {
                     runStart = w;
                 }
             } else if (runStart >= 0) {
-                runs.add(new int[]{runStart, w});
+                long lengthMs = (long) ((w - runStart) * windowMs);
+                if (lengthMs >= MIN_SEGMENT_MS && lengthMs <= MAX_SEGMENT_MS) {
+                    double distinctness = interiorDistinctness(zScores, runStart, w, numFeatures);
+                    if (distinctness >= DISTINCTNESS_THRESHOLD) {
+                        double quality = distinctness * 2
+                                + (smoothed[runStart] + smoothed[w - 1]) * 0.25
+                                + Math.log(w - runStart) * 0.3;
+                        candidates.add(new double[]{runStart, w, quality, distinctness});
+                    }
+                }
                 runStart = -1;
             }
         }
+    }
 
-        List<int[]> merged = new ArrayList<>();
-        for (int[] run : runs) {
-            int[] last = merged.isEmpty() ? null : merged.get(merged.size() - 1);
-            if (last != null && (run[0] - last[1]) * windowMs <= MERGE_GAP_MS
-                    && gapScoreStaysElevated(smoothed, last[1], run[0])) {
-                last[1] = run[1];
-            } else {
-                merged.add(run);
+    private static List<Integer> findBoundaryCandidates(double[] smoothed) {
+        List<Integer> boundaries = new ArrayList<>();
+        for (int w = 1; w < smoothed.length - 1; w++) {
+            if (smoothed[w] > BOUNDARY_THRESHOLD
+                    && smoothed[w] >= smoothed[w - 1] && smoothed[w] >= smoothed[w + 1]) {
+                if (!boundaries.isEmpty() && w - boundaries.get(boundaries.size() - 1) < 4) {
+                    if (smoothed[w] > smoothed[boundaries.get(boundaries.size() - 1)]) {
+                        boundaries.set(boundaries.size() - 1, w);
+                    }
+                } else {
+                    boundaries.add(w);
+                }
             }
         }
+        return boundaries;
+    }
 
+    private static List<double[]> pairBoundaries(List<Integer> boundaries, double[] smoothed,
+            double[][] zScores, int numFeatures, double windowMs) {
+        List<double[]> candidates = new ArrayList<>();
+        for (int i = 0; i < boundaries.size(); i++) {
+            for (int j = i + 1; j < boundaries.size(); j++) {
+                int start = boundaries.get(i);
+                int end = boundaries.get(j);
+                long lengthMs = (long) ((end - start) * windowMs);
+                if (lengthMs < MIN_SEGMENT_MS) {
+                    continue;
+                }
+                if (lengthMs > MAX_SEGMENT_MS) {
+                    break;
+                }
+                double distinctness = interiorDistinctness(zScores, start, end, numFeatures);
+                if (distinctness < DISTINCTNESS_THRESHOLD) {
+                    continue;
+                }
+                double quality = distinctness * 2 + (smoothed[start] + smoothed[end]) * 0.25
+                        + Math.log(end - start) * 0.3;
+                candidates.add(new double[]{start, end, quality, distinctness});
+            }
+        }
+        return candidates;
+    }
+
+    private static double interiorDistinctness(double[][] zScores, int start, int end, int numFeatures) {
+        int length = end - start;
+        if (length < 3) {
+            return 0;
+        }
+        double total = 0;
+        for (int f = 0; f < numFeatures; f++) {
+            double[] values = new double[length];
+            for (int w = start; w < end; w++) {
+                values[w - start] = zScores[w][f];
+            }
+            total += Math.abs(median(values));
+        }
+        return total / numFeatures;
+    }
+
+    private static List<AdSegment> selectSegments(List<double[]> candidates, double windowMs) {
+        candidates.sort((a, b) -> Double.compare(b[2], a[2]));
+        List<double[]> chosen = new ArrayList<>();
+        for (double[] candidate : candidates) {
+            double[] overlapping = null;
+            for (double[] other : chosen) {
+                if (candidate[0] < other[1] && candidate[1] > other[0]) {
+                    overlapping = other;
+                    break;
+                }
+            }
+            if (overlapping == null) {
+                chosen.add(candidate);
+            } else if ((Math.min(overlapping[1], candidate[1]) - Math.max(overlapping[0], candidate[0]))
+                    * windowMs * 2 >= (candidate[1] - candidate[0]) * windowMs
+                    && (Math.max(overlapping[1], candidate[1]) - Math.min(overlapping[0], candidate[0]))
+                    * windowMs <= MAX_SEGMENT_MS) {
+                overlapping[0] = Math.min(overlapping[0], candidate[0]);
+                overlapping[1] = Math.max(overlapping[1], candidate[1]);
+                overlapping[3] = Math.max(overlapping[3], candidate[3]);
+            }
+        }
+        chosen.sort((a, b) -> Double.compare(a[0], b[0]));
         List<AdSegment> result = new ArrayList<>();
-        for (int[] run : merged) {
-            AdSegment segment = makeSegment(run[0], run[1], smoothed, windowMs);
-            long length = segment.getEnd() - segment.getStart();
-            if (length >= MIN_SEGMENT_MS && length <= MAX_SEGMENT_MS) {
+        for (double[] candidate : chosen) {
+            float confidence = (float) Math.min(1.0, candidate[3] / 2.0);
+            AdSegment segment = new AdSegment((long) (candidate[0] * windowMs),
+                    (long) (candidate[1] * windowMs), confidence);
+            AdSegment last = result.isEmpty() ? null : result.get(result.size() - 1);
+            if (last != null && segment.getStart() - last.getEnd() <= MERGE_ADJACENT_MS
+                    && segment.getEnd() - last.getStart() <= MAX_SEGMENT_MS) {
+                last.setEnd(segment.getEnd());
+                last.setConfidence(Math.max(last.getConfidence(), segment.getConfidence()));
+            } else {
                 result.add(segment);
             }
         }
         return result;
-    }
-
-    private static boolean gapScoreStaysElevated(double[] smoothed, int gapStart, int gapEnd) {
-        for (int w = gapStart; w < gapEnd; w++) {
-            if (smoothed[w] < MERGE_GAP_SCORE) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static AdSegment makeSegment(int startWindow, int endWindow, double[] scores, double windowMs) {
-        double sum = 0;
-        for (int w = startWindow; w < endWindow; w++) {
-            sum += scores[w];
-        }
-        double meanScore = sum / (endWindow - startWindow);
-        float confidence = (float) Math.min(1.0, meanScore / (2 * SCORE_THRESHOLD));
-        return new AdSegment((long) (startWindow * windowMs), (long) (endWindow * windowMs), confidence);
     }
 
     private static double median(double[] values) {

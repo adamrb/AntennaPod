@@ -26,14 +26,14 @@ public class AdSegmentAnalyzerIntegrationTest {
     private static final File FIXTURE_DIR = new File("src/test/fixtures/addetection");
 
     /**
-     * Baseline thresholds documenting current detector capability on real audio.
-     * The acoustic detector reliably fires at ad onsets (transitions into the ad)
-     * but does not always cover the full ad span, and conversational content with
-     * embedded clips produces some false positives. Tightening these thresholds
-     * requires improving the detector; loosening them means a regression.
+     * Thresholds documenting current detector capability on real audio.
+     * The onset-pairing detector recovers the full span of clearly produced ads
+     * within BOUNDARY_TOLERANCE_MS on both ends. Weakly produced short ads may
+     * still be missed. Tightening these thresholds requires improving the
+     * detector; loosening them means a regression.
      */
-    private static final long ONSET_TOLERANCE_MS = 30_000;
-    private static final long FALSE_POSITIVE_BUDGET_MS = 150_000;
+    private static final long BOUNDARY_TOLERANCE_MS = 15_000;
+    private static final long FALSE_POSITIVE_BUDGET_MS = 60_000;
 
     @Before
     public void requireFixtures() {
@@ -42,15 +42,15 @@ public class AdSegmentAnalyzerIntegrationTest {
     }
 
     @Test
-    public void testSingleRealAdOnsetDetected() throws IOException {
+    public void testSingleRealAdFullSpanDetected() throws IOException {
         List<AdSegment> segments = analyze("single_ad.pcm");
-        assertDetectsOnset(segments, 600_000);
+        assertCoversSpan(segments, 600_000, 660_000);
     }
 
     @Test
-    public void testSecondAdOnsetDetectedAmongTwo() throws IOException {
+    public void testSecondAdFullSpanDetectedAmongTwo() throws IOException {
         List<AdSegment> segments = analyze("two_ads.pcm");
-        assertDetectsOnset(segments, 1_230_000);
+        assertCoversSpan(segments, 1_230_000, 1_290_000);
     }
 
     @Test
@@ -64,14 +64,15 @@ public class AdSegmentAnalyzerIntegrationTest {
                 flagged <= FALSE_POSITIVE_BUDGET_MS);
     }
 
-    private void assertDetectsOnset(List<AdSegment> segments, long adStart) {
+    private void assertCoversSpan(List<AdSegment> segments, long adStart, long adEnd) {
         for (AdSegment segment : segments) {
-            if (Math.abs(segment.getStart() - adStart) <= ONSET_TOLERANCE_MS
-                    || (segment.getStart() <= adStart && segment.getEnd() > adStart)) {
+            if (Math.abs(segment.getStart() - adStart) <= BOUNDARY_TOLERANCE_MS
+                    && Math.abs(segment.getEnd() - adEnd) <= BOUNDARY_TOLERANCE_MS) {
                 return;
             }
         }
-        throw new AssertionError("No segment near ad onset at " + adStart + "; got " + segments);
+        throw new AssertionError("No segment covering ad span " + adStart + "-" + adEnd
+                + " within tolerance; got " + segments);
     }
 
     private List<AdSegment> analyze(String fixtureName) throws IOException {
