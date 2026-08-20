@@ -74,30 +74,30 @@ public class AdSegmentAnalyzer {
     static List<AdSegment> findSegments(List<double[]> windows, double windowMs) {
         int numWindows = windows.size();
         int numFeatures = windows.get(0).length;
-        double[][] zScores = new double[numWindows][numFeatures];
+        double[][] deviations = new double[numWindows][numFeatures];
         for (int f = 0; f < numFeatures; f++) {
             double[] values = new double[numWindows];
             for (int w = 0; w < numWindows; w++) {
                 values[w] = windows.get(w)[f];
             }
             double median = median(values.clone());
-            double[] deviations = new double[numWindows];
+            double[] absoluteDeviations = new double[numWindows];
             for (int w = 0; w < numWindows; w++) {
-                deviations[w] = Math.abs(values[w] - median);
+                absoluteDeviations[w] = Math.abs(values[w] - median);
             }
-            double mad = median(deviations.clone()) * 1.4826;
+            double mad = median(absoluteDeviations.clone()) * 1.4826;
             if (mad < 1e-9) {
                 mad = 1;
             }
             for (int w = 0; w < numWindows; w++) {
-                zScores[w][f] = (values[w] - median) / mad;
+                deviations[w][f] = (values[w] - median) / mad;
             }
         }
         double[] scores = new double[numWindows];
         for (int w = 0; w < numWindows; w++) {
             double sum = 0;
             for (int f = 0; f < numFeatures; f++) {
-                sum += Math.min(6, Math.abs(zScores[w][f]));
+                sum += Math.min(6, Math.abs(deviations[w][f]));
             }
             scores[w] = sum / numFeatures;
         }
@@ -113,13 +113,13 @@ public class AdSegmentAnalyzer {
         }
 
         List<Integer> boundaries = findBoundaryCandidates(smoothed);
-        List<double[]> candidates = pairBoundaries(boundaries, smoothed, zScores, numFeatures, windowMs);
-        addSustainedRunCandidates(candidates, smoothed, zScores, numFeatures, windowMs);
+        List<double[]> candidates = pairBoundaries(boundaries, smoothed, deviations, numFeatures, windowMs);
+        addSustainedRunCandidates(candidates, smoothed, deviations, numFeatures, windowMs);
         return selectSegments(candidates, windowMs);
     }
 
     private static void addSustainedRunCandidates(List<double[]> candidates, double[] smoothed,
-            double[][] zScores, int numFeatures, double windowMs) {
+            double[][] deviations, int numFeatures, double windowMs) {
         int numWindows = smoothed.length;
         int runStart = -1;
         for (int w = 0; w <= numWindows; w++) {
@@ -130,7 +130,7 @@ public class AdSegmentAnalyzer {
             } else if (runStart >= 0) {
                 long lengthMs = (long) ((w - runStart) * windowMs);
                 if (lengthMs >= MIN_SEGMENT_MS && lengthMs <= MAX_SEGMENT_MS) {
-                    double distinctness = interiorDistinctness(zScores, runStart, w, numFeatures);
+                    double distinctness = interiorDistinctness(deviations, runStart, w, numFeatures);
                     if (distinctness >= DISTINCTNESS_THRESHOLD) {
                         double quality = distinctness * 2
                                 + (smoothed[runStart] + smoothed[w - 1]) * 0.25
@@ -161,7 +161,7 @@ public class AdSegmentAnalyzer {
     }
 
     private static List<double[]> pairBoundaries(List<Integer> boundaries, double[] smoothed,
-            double[][] zScores, int numFeatures, double windowMs) {
+            double[][] deviations, int numFeatures, double windowMs) {
         List<double[]> candidates = new ArrayList<>();
         for (int i = 0; i < boundaries.size(); i++) {
             for (int j = i + 1; j < boundaries.size(); j++) {
@@ -174,7 +174,7 @@ public class AdSegmentAnalyzer {
                 if (lengthMs > MAX_SEGMENT_MS) {
                     break;
                 }
-                double distinctness = interiorDistinctness(zScores, start, end, numFeatures);
+                double distinctness = interiorDistinctness(deviations, start, end, numFeatures);
                 if (distinctness < DISTINCTNESS_THRESHOLD) {
                     continue;
                 }
@@ -186,7 +186,7 @@ public class AdSegmentAnalyzer {
         return candidates;
     }
 
-    private static double interiorDistinctness(double[][] zScores, int start, int end, int numFeatures) {
+    private static double interiorDistinctness(double[][] deviations, int start, int end, int numFeatures) {
         int length = end - start;
         if (length < 3) {
             return 0;
@@ -195,7 +195,7 @@ public class AdSegmentAnalyzer {
         for (int f = 0; f < numFeatures; f++) {
             double[] values = new double[length];
             for (int w = start; w < end; w++) {
-                values[w - start] = zScores[w][f];
+                values[w - start] = deviations[w][f];
             }
             total += Math.abs(median(values));
         }
