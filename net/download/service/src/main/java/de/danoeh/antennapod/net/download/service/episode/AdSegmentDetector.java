@@ -2,7 +2,6 @@ package de.danoeh.antennapod.net.download.service.episode;
 
 import android.media.AudioFormat;
 import android.media.MediaCodec;
-import android.media.MediaCodecInfo;
 import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.util.Log;
@@ -99,17 +98,6 @@ public final class AdSegmentDetector {
             trace(trace, "Audio track: " + mime + ", duration " + durationUs / 1000000 + "s");
             codec = MediaCodec.createDecoderByType(mime);
             boolean batchInput = fastMode && "audio/mpeg".equals(mime);
-            if (batchInput) {
-                try {
-                    batchInput = codec.getCodecInfo().getCapabilitiesForType(mime)
-                            .isFeatureSupported(MediaCodecInfo.CodecCapabilities.FEATURE_MultipleFrames);
-                } catch (IllegalArgumentException e) {
-                    batchInput = false;
-                }
-            }
-            if (batchInput) {
-                format.setFeatureEnabled(MediaCodecInfo.CodecCapabilities.FEATURE_MultipleFrames, true);
-            }
             codec.configure(format, null, null, 0);
             codec.start();
             trace(trace, "Codec: " + codec.getName() + ", fast mode: " + fastMode
