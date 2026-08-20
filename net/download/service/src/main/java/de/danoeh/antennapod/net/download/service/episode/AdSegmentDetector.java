@@ -137,27 +137,32 @@ public final class AdSegmentDetector {
         double windowMs;
         if (threads == 1) {
             AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
+            DecodeStats stats = new DecodeStats();
             decodeRange(filePath, 0, Long.MAX_VALUE, batchInput, analyzer, us -> {
                 doneUs.set(0, us);
                 progressUpdater.run();
-            }, trace);
+            }, trace, stats);
+            trace(trace, "Chunk stats: " + stats.summary());
             windowMs = analyzer.getWindowMs();
             chunkWindows = new ArrayList<>();
             chunkWindows.add(analyzer.getWindows());
         } else {
             ExecutorService pool = Executors.newFixedThreadPool(threads);
             List<Future<AdSegmentAnalyzer>> futures = new ArrayList<>();
+            List<DecodeStats> chunkStats = new ArrayList<>();
             long chunkUs = durationUs / threads / windowUs * windowUs;
             for (int i = 0; i < threads; i++) {
                 final int chunkIndex = i;
                 final long chunkStartUs = i * chunkUs;
                 final long chunkEndUs = (i == threads - 1) ? Long.MAX_VALUE : (i + 1) * chunkUs;
+                final DecodeStats stats = new DecodeStats();
+                chunkStats.add(stats);
                 futures.add(pool.submit(() -> {
                     AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
                     decodeRange(filePath, chunkStartUs, chunkEndUs, true, analyzer, us -> {
                         doneUs.set(chunkIndex, us - chunkStartUs);
                         progressUpdater.run();
-                    }, null);
+                    }, null, stats);
                     return analyzer;
                 }));
             }
@@ -165,12 +170,13 @@ public final class AdSegmentDetector {
             chunkWindows = new ArrayList<>();
             windowMs = 0;
             try {
-                for (Future<AdSegmentAnalyzer> future : futures) {
-                    AdSegmentAnalyzer analyzer = future.get();
+                for (int i = 0; i < futures.size(); i++) {
+                    AdSegmentAnalyzer analyzer = futures.get(i).get();
                     if (windowMs == 0) {
                         windowMs = analyzer.getWindowMs();
                     }
                     chunkWindows.add(analyzer.getWindows());
+                    trace(trace, "Chunk " + i + " stats: " + chunkStats.get(i).summary());
                 }
             } catch (ExecutionException e) {
                 if (e.getCause() instanceof MediaCodec.CodecException) {
@@ -199,6 +205,20 @@ public final class AdSegmentDetector {
         void onDecodedTo(long sampleTimeUs);
     }
 
+    private static class DecodeStats {
+        long extractorNs;
+        long inputWaitNs;
+        long outputWaitNs;
+        long analyzerNs;
+        long outputBuffers;
+
+        String summary() {
+            return String.format(java.util.Locale.US,
+                    "extractor=%.1fs inputWait=%.1fs outputWait=%.1fs analyzer=%.1fs outputBuffers=%d",
+                    extractorNs / 1e9, inputWaitNs / 1e9, outputWaitNs / 1e9, analyzerNs / 1e9, outputBuffers);
+        }
+    }
+
     private static MediaFormat findAudioTrack(MediaExtractor extractor) {
         for (int i = 0; i < extractor.getTrackCount(); i++) {
             MediaFormat trackFormat = extractor.getTrackFormat(i);
@@ -212,7 +232,8 @@ public final class AdSegmentDetector {
     }
 
     private static void decodeRange(String filePath, long rangeStartUs, long rangeEndUs, boolean batchInput,
-            AdSegmentAnalyzer analyzer, RangeProgress rangeProgress, StringBuilder trace) throws IOException {
+            AdSegmentAnalyzer analyzer, RangeProgress rangeProgress, StringBuilder trace,
+            DecodeStats stats) throws IOException {
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
         try {
@@ -259,7 +280,9 @@ public final class AdSegmentDetector {
                 }
                 boolean progressed = false;
                 while (!inputDone) {
+                    long t0 = System.nanoTime();
                     int inputIndex = codec.dequeueInputBuffer(0);
+                    stats.inputWaitNs += System.nanoTime() - t0;
                     if (inputIndex < 0) {
                         break;
                     }
@@ -267,6 +290,7 @@ public final class AdSegmentDetector {
                     ByteBuffer inputBuffer = codec.getInputBuffer(inputIndex);
                     int totalSize = 0;
                     long sampleTime = -1;
+                    long t1 = System.nanoTime();
                     while (true) {
                         long nextSampleTime = extractor.getSampleTime();
                         if (nextSampleTime < 0 || nextSampleTime >= rangeEndUs) {
@@ -285,6 +309,7 @@ public final class AdSegmentDetector {
                             break;
                         }
                     }
+                    stats.extractorNs += System.nanoTime() - t1;
                     if (totalSize == 0) {
                         codec.queueInputBuffer(inputIndex, 0, 0, 0,
                                 MediaCodec.BUFFER_FLAG_END_OF_STREAM);
@@ -296,7 +321,9 @@ public final class AdSegmentDetector {
                         }
                     }
                 }
+                long t2 = System.nanoTime();
                 int outputIndex = codec.dequeueOutputBuffer(info, progressed ? 0 : CODEC_TIMEOUT_US);
+                stats.outputWaitNs += System.nanoTime() - t2;
                 while (outputIndex >= 0 || outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                     progressed = true;
                     if (outputIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -304,6 +331,7 @@ public final class AdSegmentDetector {
                         outputIndex = codec.dequeueOutputBuffer(info, 0);
                         continue;
                     }
+                    stats.outputBuffers++;
                     if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         outputDone = true;
                     }
@@ -323,14 +351,18 @@ public final class AdSegmentDetector {
                         int sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
                         outputBuffer.position(info.offset);
                         outputBuffer.limit(info.offset + info.size);
+                        long t3 = System.nanoTime();
                         analyzer.addPcm(outputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer(),
                                 channels, sampleRate);
+                        stats.analyzerNs += System.nanoTime() - t3;
                     }
                     codec.releaseOutputBuffer(outputIndex, false);
                     if (outputDone) {
                         break;
                     }
+                    long t4 = System.nanoTime();
                     outputIndex = codec.dequeueOutputBuffer(info, 0);
+                    stats.outputWaitNs += System.nanoTime() - t4;
                 }
                 if (progressed) {
                     lastProgressTime = now;

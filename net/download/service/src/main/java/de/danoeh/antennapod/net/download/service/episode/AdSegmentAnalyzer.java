@@ -38,6 +38,7 @@ public class AdSegmentAnalyzer {
     private double effectiveSampleRate = TARGET_SAMPLE_RATE;
     private long skipUs = 0;
     private long skipFramesRemaining = 0;
+    private short[] pcmScratch = new short[0];
 
     public AdSegmentAnalyzer() {
         for (int i = 0; i < FRAME_SIZE; i++) {
@@ -56,32 +57,33 @@ public class AdSegmentAnalyzer {
             skipFramesRemaining = skipUs * sampleRate / 1000000;
             skipUs = 0;
         }
-        short[] data = new short[samples.remaining()];
-        samples.get(data);
-        int frames = data.length / channels;
+        int length = samples.remaining();
+        if (pcmScratch.length < length) {
+            pcmScratch = new short[length];
+        }
+        short[] data = pcmScratch;
+        samples.get(data, 0, length);
+        int frames = length / channels;
+        int start = 0;
         if (skipFramesRemaining > 0) {
             if (skipFramesRemaining >= frames) {
                 skipFramesRemaining -= frames;
                 return;
             }
-            int offset = (int) skipFramesRemaining * channels;
-            short[] remaining = new short[data.length - offset];
-            System.arraycopy(data, offset, remaining, 0, remaining.length);
-            data = remaining;
-            frames = data.length / channels;
+            start = (int) skipFramesRemaining;
             skipFramesRemaining = 0;
         }
-        double scale = channels * 32768.0;
-        for (int i = 0; i < frames; i++) {
-            double mono = 0;
+        float scale = (float) (channels * 32768.0 * decimFactor);
+        for (int i = start; i < frames; i++) {
+            long mono = 0;
             int base = i * channels;
             for (int c = 0; c < channels; c++) {
                 mono += data[base + c];
             }
-            decimBuffer += mono / scale;
+            decimBuffer += mono;
             decimCount++;
             if (decimCount >= decimFactor) {
-                pushSample((float) (decimBuffer / decimCount));
+                pushSample((float) decimBuffer / scale);
                 decimBuffer = 0;
                 decimCount = 0;
             }
