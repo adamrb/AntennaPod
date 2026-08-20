@@ -14,11 +14,9 @@ import org.apache.commons.lang3.StringUtils;
 
 import java.io.File;
 import java.io.InterruptedIOException;
-import java.util.List;
 import java.util.concurrent.ExecutionException;
 
 import de.danoeh.antennapod.model.download.DownloadRequest;
-import de.danoeh.antennapod.model.feed.AdSegment;
 import de.danoeh.antennapod.storage.preferences.UserPreferences;
 import de.danoeh.antennapod.model.download.DownloadResult;
 import de.danoeh.antennapod.storage.database.DBReader;
@@ -94,8 +92,7 @@ public class MediaDownloadedHandler implements Runnable {
         final FeedItem item = media.getItem();
 
         if (item != null && UserPreferences.isAdDetectionEnabled()) {
-            List<AdSegment> segments = AdSegmentDetectionPipeline.detect(media);
-            DBWriter.setAdSegments(item.getId(), segments);
+            AdSegmentDetectionPipeline.detectAsync(media);
         }
 
         try {

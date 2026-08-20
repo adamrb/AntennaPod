@@ -17,6 +17,8 @@ import de.danoeh.antennapod.model.feed.AdSegment;
 public final class AdSegmentDetector {
     private static final String TAG = "AdSegmentDetector";
     private static final long CODEC_TIMEOUT_US = 10000;
+    private static final long PROGRESS_TIMEOUT_MS = 20000;
+    private static final long TOTAL_DEADLINE_MS = 10 * 60 * 1000;
 
     private AdSegmentDetector() {
     }
@@ -58,7 +60,22 @@ public final class AdSegmentDetector {
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
             boolean inputDone = false;
             boolean outputDone = false;
+            long startTime = System.currentTimeMillis();
+            long lastProgressTime = startTime;
             while (!outputDone) {
+                if (Thread.currentThread().isInterrupted()) {
+                    Log.w(TAG, "Analysis interrupted, aborting");
+                    return new ArrayList<>();
+                }
+                long now = System.currentTimeMillis();
+                if (now - lastProgressTime > PROGRESS_TIMEOUT_MS) {
+                    Log.w(TAG, "Codec made no progress for " + PROGRESS_TIMEOUT_MS + "ms, aborting analysis");
+                    return new ArrayList<>();
+                }
+                if (now - startTime > TOTAL_DEADLINE_MS) {
+                    Log.w(TAG, "Analysis exceeded total deadline, aborting");
+                    return new ArrayList<>();
+                }
                 if (!inputDone) {
                     int inputIndex = codec.dequeueInputBuffer(CODEC_TIMEOUT_US);
                     if (inputIndex >= 0) {
@@ -73,30 +90,37 @@ public final class AdSegmentDetector {
                                     extractor.getSampleTime(), 0);
                             extractor.advance();
                         }
+                        lastProgressTime = now;
                     }
                 }
                 int outputIndex = codec.dequeueOutputBuffer(info, CODEC_TIMEOUT_US);
                 if (outputIndex >= 0) {
+                    lastProgressTime = now;
                     if ((info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
                         outputDone = true;
                     }
+                    boolean unsupportedEncoding = false;
                     if (info.size > 0) {
                         ByteBuffer outputBuffer = codec.getOutputBuffer(outputIndex);
                         MediaFormat outputFormat = codec.getOutputFormat(outputIndex);
                         if (outputFormat.containsKey(MediaFormat.KEY_PCM_ENCODING)
                                 && outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING)
                                         != AudioFormat.ENCODING_PCM_16BIT) {
-                            Log.w(TAG, "Unsupported PCM encoding, skipping analysis");
-                            return new ArrayList<>();
+                            unsupportedEncoding = true;
+                        } else {
+                            int channels = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
+                            int sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
+                            outputBuffer.position(info.offset);
+                            outputBuffer.limit(info.offset + info.size);
+                            analyzer.addPcm(outputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer(),
+                                    channels, sampleRate);
                         }
-                        int channels = outputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT);
-                        int sampleRate = outputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE);
-                        outputBuffer.position(info.offset);
-                        outputBuffer.limit(info.offset + info.size);
-                        analyzer.addPcm(outputBuffer.order(ByteOrder.nativeOrder()).asShortBuffer(),
-                                channels, sampleRate);
                     }
                     codec.releaseOutputBuffer(outputIndex, false);
+                    if (unsupportedEncoding) {
+                        Log.w(TAG, "Unsupported PCM encoding, skipping analysis");
+                        return new ArrayList<>();
+                    }
                 }
             }
             return analyzer.getSegments();
