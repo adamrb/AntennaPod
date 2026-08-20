@@ -1,8 +1,15 @@
 package de.danoeh.antennapod.ui.screen.playback.audio;
 
+import android.app.ProgressDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
+import android.content.Context;
+import android.graphics.Typeface;
+import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.KeyEvent;
+import android.widget.ScrollView;
 import android.view.LayoutInflater;
 import android.view.MenuItem;
 import android.view.View;
@@ -23,6 +30,13 @@ import androidx.viewpager2.widget.ViewPager2;
 
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.bottomsheet.BottomSheetBehavior;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.snackbar.Snackbar;
+
+import de.danoeh.antennapod.event.MessageEvent;
+import de.danoeh.antennapod.net.download.service.episode.AdSegmentDetectionPipeline;
+import de.danoeh.antennapod.storage.database.DBWriter;
+import io.reactivex.rxjava3.core.Single;
 
 import de.danoeh.antennapod.model.feed.Feed;
 import de.danoeh.antennapod.playback.service.PlaybackController;
@@ -106,6 +120,7 @@ public class AudioPlayerFragment extends Fragment implements
     private FeedMedia currentMedia;
     private List<AdSegment> adSegments;
     private Disposable disposable;
+    private Disposable adDetectionDisposable;
     private boolean showTimeLeft;
     private boolean seekedToChapterStart = false;
     private int currentChapterIndex = -1;
@@ -539,6 +554,9 @@ public class AudioPlayerFragment extends Fragment implements
             new TranscriptDialogFragment().show(
                     getActivity().getSupportFragmentManager(), TranscriptDialogFragment.TAG);
             return true;
+        } else if (itemId == R.id.detect_ads_item) {
+            runManualAdDetection();
+            return true;
         } else if (itemId == R.id.open_feed_item) {
             if (feedItem != null) {
                 openFeed(feedItem.getFeed());
@@ -546,6 +564,71 @@ public class AudioPlayerFragment extends Fragment implements
             return true;
         }
         return false;
+    }
+
+    private void runManualAdDetection() {
+        if (currentMedia == null || !currentMedia.localFileAvailable()) {
+            Snackbar.make(getView(), R.string.detect_ads_no_local_file, Snackbar.LENGTH_LONG).show();
+            return;
+        }
+        ProgressDialog progressDialog = new ProgressDialog(getContext());
+        progressDialog.setMessage(getString(R.string.ad_analysis_in_progress));
+        progressDialog.setIndeterminate(true);
+        progressDialog.setCancelable(false);
+        progressDialog.show();
+        if (adDetectionDisposable != null) {
+            adDetectionDisposable.dispose();
+        }
+        adDetectionDisposable = Single.fromCallable(() -> {
+            StringBuilder trace = new StringBuilder();
+            trace.append("AntennaPod ad detection report\n");
+            trace.append("Device: ").append(Build.MANUFACTURER).append(' ').append(Build.MODEL)
+                    .append(", Android ").append(Build.VERSION.RELEASE).append('\n');
+            FeedMedia media = DBReader.getFeedMedia(currentMedia.getId());
+            if (media == null) {
+                trace.append("ERROR: media not found in database\n");
+                return trace.toString();
+            }
+            ChapterUtils.loadChapters(media, getContext(), false);
+            List<AdSegment> segments = AdSegmentDetectionPipeline.detect(getContext(), media, trace);
+            DBWriter.setAdSegments(media.getItemId(), segments);
+            return trace.toString();
+        })
+                .subscribeOn(Schedulers.io())
+                .observeOn(AndroidSchedulers.mainThread())
+                .subscribe(report -> {
+                    progressDialog.dismiss();
+                    loadMediaInfo(false);
+                    showAdDetectionReport(report);
+                }, error -> {
+                    progressDialog.dismiss();
+                    showAdDetectionReport("EXCEPTION: " + Log.getStackTraceString(error));
+                });
+    }
+
+    private void showAdDetectionReport(String report) {
+        TextView textView = new TextView(getContext());
+        textView.setText(report);
+        textView.setTextIsSelectable(true);
+        textView.setTypeface(Typeface.MONOSPACE);
+        textView.setTextSize(12);
+        int padding = (int) (16 * getResources().getDisplayMetrics().density);
+        ScrollView scrollView = new ScrollView(getContext());
+        scrollView.setPadding(padding, padding / 2, padding, padding / 2);
+        scrollView.addView(textView);
+        new MaterialAlertDialogBuilder(getContext())
+                .setTitle(R.string.detect_ads_report_title)
+                .setView(scrollView)
+                .setPositiveButton(android.R.string.ok, null)
+                .setNeutralButton(R.string.copy_to_clipboard, (dialog, which) -> {
+                    ClipboardManager clipboard = (ClipboardManager)
+                            getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Ad detection report", report));
+                    if (Build.VERSION.SDK_INT < 32) {
+                        EventBus.getDefault().post(new MessageEvent(getString(R.string.copied_to_clipboard)));
+                    }
+                })
+                .show();
     }
 
     private void openFeed(Feed feed) {

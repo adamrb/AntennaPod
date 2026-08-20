@@ -28,16 +28,27 @@ public final class AdSegmentDetector {
     }
 
     public static List<AdSegment> detect(String filePath, ProgressListener progressListener) {
+        return detect(filePath, progressListener, null);
+    }
+
+    public static List<AdSegment> detect(String filePath, ProgressListener progressListener, StringBuilder trace) {
         try {
-            return decodeAndAnalyze(filePath, progressListener);
+            return decodeAndAnalyze(filePath, progressListener, trace);
         } catch (Exception e) {
             Log.e(TAG, "Ad segment analysis failed for " + filePath, e);
+            trace(trace, "EXCEPTION: " + e);
             return new ArrayList<>();
         }
     }
 
-    private static List<AdSegment> decodeAndAnalyze(String filePath, ProgressListener progressListener)
-            throws IOException {
+    private static void trace(StringBuilder trace, String message) {
+        if (trace != null) {
+            trace.append(message).append('\n');
+        }
+    }
+
+    private static List<AdSegment> decodeAndAnalyze(String filePath, ProgressListener progressListener,
+            StringBuilder trace) throws IOException {
         MediaExtractor extractor = new MediaExtractor();
         MediaCodec codec = null;
         try {
@@ -54,14 +65,18 @@ public final class AdSegmentDetector {
                 }
             }
             if (trackIndex < 0) {
+                trace(trace, "No audio track found in file " + filePath);
                 return new ArrayList<>();
             }
             extractor.selectTrack(trackIndex);
             long durationUs = format.containsKey(MediaFormat.KEY_DURATION)
                     ? format.getLong(MediaFormat.KEY_DURATION) : 0;
+            trace(trace, "Audio track: " + format.getString(MediaFormat.KEY_MIME)
+                    + ", duration " + durationUs / 1000000 + "s");
             codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME));
             codec.configure(format, null, null, 0);
             codec.start();
+            trace(trace, "Codec: " + codec.getName());
 
             AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
             MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
@@ -73,15 +88,18 @@ public final class AdSegmentDetector {
             while (!outputDone) {
                 if (Thread.currentThread().isInterrupted()) {
                     Log.w(TAG, "Analysis interrupted, aborting");
+                    trace(trace, "ABORT: thread interrupted");
                     return new ArrayList<>();
                 }
                 long now = System.currentTimeMillis();
                 if (now - lastProgressTime > PROGRESS_TIMEOUT_MS) {
                     Log.w(TAG, "Codec made no progress for " + PROGRESS_TIMEOUT_MS + "ms, aborting analysis");
+                    trace(trace, "ABORT: codec made no progress for " + PROGRESS_TIMEOUT_MS + "ms");
                     return new ArrayList<>();
                 }
                 if (now - startTime > TOTAL_DEADLINE_MS) {
                     Log.w(TAG, "Analysis exceeded total deadline, aborting");
+                    trace(trace, "ABORT: exceeded total deadline");
                     return new ArrayList<>();
                 }
                 if (!inputDone) {
@@ -134,11 +152,15 @@ public final class AdSegmentDetector {
                     codec.releaseOutputBuffer(outputIndex, false);
                     if (unsupportedEncoding) {
                         Log.w(TAG, "Unsupported PCM encoding, skipping analysis");
+                        trace(trace, "ABORT: unsupported PCM encoding (not 16-bit)");
                         return new ArrayList<>();
                     }
                 }
             }
-            return analyzer.getSegments();
+            List<AdSegment> segments = analyzer.getSegments();
+            trace(trace, "Decode finished in " + (System.currentTimeMillis() - startTime) / 1000 + "s, "
+                    + segments.size() + " segment(s) found");
+            return segments;
         } finally {
             if (codec != null) {
                 try {

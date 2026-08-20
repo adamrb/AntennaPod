@@ -571,6 +571,9 @@
     <string name="ad_segment_skipped">Skipped ad segment</string>
     <string name="ad_analysis_notification_title">Detecting ad segments</string>
     <string name="ad_analysis_in_progress">Detecting ad segments…</string>
+    <string name="detect_ads_label">Detect ads</string>
+    <string name="detect_ads_report_title">Ad detection report</string>
+    <string name="detect_ads_no_local_file">Episode must be downloaded to detect ads</string>
     <string name="pref_rewind">Rewind skip time</string>
     <string name="pref_rewind_sum">Customize the number of seconds to jump backwards when the rewind button is clicked</string>
     <string name="pref_expandNotify_title">High notification priority</string>

@@ -11,12 +11,14 @@ import org.greenrobot.eventbus.EventBus;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import de.danoeh.antennapod.event.AdAnalysisProgressEvent;
 import de.danoeh.antennapod.event.FeedItemEvent;
 import de.danoeh.antennapod.model.feed.AdSegment;
+import de.danoeh.antennapod.model.feed.Chapter;
 import de.danoeh.antennapod.model.feed.FeedMedia;
 import de.danoeh.antennapod.model.feed.Transcript;
 import de.danoeh.antennapod.net.download.service.R;
@@ -55,24 +57,63 @@ public final class AdSegmentDetectionPipeline {
     }
 
     public static List<AdSegment> detect(Context context, FeedMedia media) {
-        long duration = media.getDuration();
+        return detect(context, media, null);
+    }
 
-        List<AdSegment> fromChapters = AdChapterDetector.detect(media.getChapters(), duration);
+    public static List<AdSegment> detect(Context context, FeedMedia media, StringBuilder trace) {
+        long duration = media.getDuration();
+        trace(trace, "Episode: " + media.getEpisodeTitle());
+        trace(trace, "Duration: " + duration / 1000 + "s, local file: " + media.getLocalFileUrl());
+
+        List<Chapter> chapters = media.getChapters();
+        trace(trace, "Chapters: " + (chapters == null ? "none" : chapters.size()));
+        List<AdSegment> fromChapters = AdChapterDetector.detect(chapters, duration);
         if (!fromChapters.isEmpty()) {
             Log.d(TAG, "Using " + fromChapters.size() + " ad segments from chapter titles");
+            trace(trace, "Signal used: CHAPTER TITLES -> " + fromChapters.size() + " segment(s)");
+            traceSegments(trace, fromChapters);
             return fromChapters;
         }
 
+        trace(trace, "Transcript URL: " + (media.getItem() == null
+                ? "no item" : media.getItem().getTranscriptUrl()));
         List<AdSegment> fromTranscript = detectFromTranscript(media, duration);
         if (!fromTranscript.isEmpty()) {
             Log.d(TAG, "Using " + fromTranscript.size() + " ad segments from transcript");
+            trace(trace, "Signal used: TRANSCRIPT -> " + fromTranscript.size() + " segment(s)");
+            traceSegments(trace, fromTranscript);
             return fromTranscript;
         }
 
+        trace(trace, "Falling back to audio analysis");
         List<AdSegment> fromAudio = AdSegmentDetector.detect(media.getLocalFileUrl(),
-                percent -> reportProgress(context, media, percent));
+                percent -> reportProgress(context, media, percent), trace);
         Log.d(TAG, "Using " + fromAudio.size() + " ad segments from audio analysis");
+        trace(trace, "Signal used: AUDIO ANALYSIS -> " + fromAudio.size() + " segment(s)");
+        traceSegments(trace, fromAudio);
         return fromAudio;
+    }
+
+    private static void trace(StringBuilder trace, String message) {
+        if (trace != null) {
+            trace.append(message).append('\n');
+        }
+    }
+
+    private static void traceSegments(StringBuilder trace, List<AdSegment> segments) {
+        if (trace == null) {
+            return;
+        }
+        for (AdSegment segment : segments) {
+            trace.append(String.format(Locale.US, "  %s - %s (conf %.2f)%n",
+                    formatTime(segment.getStart()), formatTime(segment.getEnd()), segment.getConfidence()));
+        }
+    }
+
+    private static String formatTime(long ms) {
+        long totalSeconds = ms / 1000;
+        return String.format(Locale.US, "%d:%02d:%02d",
+                totalSeconds / 3600, (totalSeconds % 3600) / 60, totalSeconds % 60);
     }
 
     private static void reportProgress(Context context, FeedMedia media, int percent) {

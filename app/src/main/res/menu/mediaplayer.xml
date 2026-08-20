@@ -81,6 +81,12 @@
     </item>
 
     <item
+        android:id="@+id/detect_ads_item"
+        custom:showAsAction="never"
+        android:title="@string/detect_ads_label">
+    </item>
+
+    <item
         android:id="@+id/open_social_interact_url"
         android:icon="@drawable/ic_chat"
         custom:showAsAction="never"
