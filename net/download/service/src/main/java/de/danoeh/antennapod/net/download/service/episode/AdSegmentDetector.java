@@ -27,6 +27,7 @@ public final class AdSegmentDetector {
     private static final long TOTAL_DEADLINE_MS = 10 * 60 * 1000;
     private static final long MIN_CHUNK_US = 60_000_000L;
     private static final long PREROLL_US = 2_000_000L;
+    private static final int OVERLAP_WINDOWS = 4;
     private static final int MAX_THREADS = 8;
 
     public interface ProgressListener {
@@ -40,12 +41,22 @@ public final class AdSegmentDetector {
         return detect(filePath, progressListener, null);
     }
 
+    private static class ParallelDecodeException extends IOException {
+        ParallelDecodeException(String message) {
+            super(message);
+        }
+
+        ParallelDecodeException(Throwable cause) {
+            super(cause);
+        }
+    }
+
     public static List<AdSegment> detect(String filePath, ProgressListener progressListener, StringBuilder trace) {
         try {
             return detectParallel(filePath, progressListener, trace);
-        } catch (MediaCodec.CodecException e) {
+        } catch (MediaCodec.CodecException | ParallelDecodeException e) {
             Log.w(TAG, "Codec failed in fast mode, retrying with conservative decode loop", e);
-            trace(trace, "Codec error in fast mode (" + describeCodecException(e)
+            trace(trace, "Codec error in fast mode (" + describeException(e)
                     + "), retrying with conservative decode loop");
             try {
                 return decodeAndAnalyzeSerial(filePath, progressListener, trace);
@@ -133,7 +144,7 @@ public final class AdSegmentDetector {
             }
         };
 
-        List<List<double[]>> chunkWindows;
+        List<double[]> merged = new ArrayList<>();
         double windowMs;
         if (threads == 1) {
             AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
@@ -144,56 +155,71 @@ public final class AdSegmentDetector {
             }, trace, stats);
             trace(trace, "Chunk stats: " + stats.summary());
             windowMs = analyzer.getWindowMs();
-            chunkWindows = new ArrayList<>();
-            chunkWindows.add(analyzer.getWindows());
+            merged.addAll(analyzer.getWindows());
         } else {
             ExecutorService pool = Executors.newFixedThreadPool(threads);
             List<Future<AdSegmentAnalyzer>> futures = new ArrayList<>();
             List<DecodeStats> chunkStats = new ArrayList<>();
             long chunkUs = durationUs / threads / windowUs * windowUs;
+            long overlapUs = OVERLAP_WINDOWS * windowUs;
             for (int i = 0; i < threads; i++) {
                 final int chunkIndex = i;
-                final long chunkStartUs = i * chunkUs;
-                final long chunkEndUs = (i == threads - 1) ? Long.MAX_VALUE : (i + 1) * chunkUs;
+                final long ownedStartUs = i * chunkUs;
+                final long decodeStartUs = Math.max(0, ownedStartUs - overlapUs);
+                final long ownedEndUs = (i == threads - 1) ? Long.MAX_VALUE : (i + 1) * chunkUs;
                 final DecodeStats stats = new DecodeStats();
                 chunkStats.add(stats);
                 futures.add(pool.submit(() -> {
                     AdSegmentAnalyzer analyzer = new AdSegmentAnalyzer();
-                    decodeRange(filePath, chunkStartUs, chunkEndUs, true, analyzer, us -> {
-                        doneUs.set(chunkIndex, us - chunkStartUs);
+                    decodeRange(filePath, decodeStartUs, ownedEndUs, true, analyzer, us -> {
+                        doneUs.set(chunkIndex, Math.max(0, us - ownedStartUs));
                         progressUpdater.run();
                     }, null, stats);
                     return analyzer;
                 }));
             }
             pool.shutdown();
-            chunkWindows = new ArrayList<>();
             windowMs = 0;
+            long windowsPerChunk = chunkUs / windowUs;
             try {
                 for (int i = 0; i < futures.size(); i++) {
                     AdSegmentAnalyzer analyzer = futures.get(i).get();
                     if (windowMs == 0) {
                         windowMs = analyzer.getWindowMs();
                     }
-                    chunkWindows.add(analyzer.getWindows());
-                    trace(trace, "Chunk " + i + " stats: " + chunkStats.get(i).summary());
+                    List<double[]> windows = analyzer.getWindows();
+                    int overlap = i == 0 ? 0 : OVERLAP_WINDOWS;
+                    boolean lastChunk = i == futures.size() - 1;
+                    long expected = lastChunk ? -1 : windowsPerChunk;
+                    trace(trace, "Chunk " + i + " stats: " + chunkStats.get(i).summary()
+                            + " windows=" + windows.size() + " overlap=" + overlap
+                            + " expected=" + (lastChunk ? "rest" : expected));
+                    if (!lastChunk && windows.size() == overlap + expected - 1 && windows.size() > overlap) {
+                        windows.add(windows.get(windows.size() - 1));
+                    }
+                    if (windows.size() < overlap + (lastChunk ? 1 : expected)) {
+                        throw new ParallelDecodeException("Chunk " + i + " produced too few windows ("
+                                + windows.size() + ")");
+                    }
+                    int end = lastChunk ? windows.size() : (int) (overlap + expected);
+                    merged.addAll(windows.subList(overlap, end));
                 }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw e;
             } catch (ExecutionException e) {
                 if (e.getCause() instanceof MediaCodec.CodecException) {
                     throw (MediaCodec.CodecException) e.getCause();
                 }
-                if (e.getCause() instanceof IOException) {
-                    throw (IOException) e.getCause();
-                }
-                throw new IOException(e.getCause());
+                throw new ParallelDecodeException(e.getCause());
             } finally {
                 pool.shutdownNow();
+                try {
+                    pool.awaitTermination(30, java.util.concurrent.TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
             }
-        }
-
-        List<double[]> merged = new ArrayList<>();
-        for (List<double[]> windows : chunkWindows) {
-            merged.addAll(windows);
         }
         List<AdSegment> segments = AdSegmentAnalyzer.getSegments(merged, windowMs);
         trace(trace, "Decode finished in " + (System.currentTimeMillis() - startTime) / 1000 + "s, "
