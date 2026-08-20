@@ -9,51 +9,26 @@ import androidx.core.app.NotificationManagerCompat;
 import org.greenrobot.eventbus.EventBus;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 
 import de.danoeh.antennapod.event.AdAnalysisProgressEvent;
-import de.danoeh.antennapod.event.FeedItemEvent;
 import de.danoeh.antennapod.model.feed.AdSegment;
 import de.danoeh.antennapod.model.feed.Chapter;
 import de.danoeh.antennapod.model.feed.FeedMedia;
 import de.danoeh.antennapod.model.feed.Transcript;
 import de.danoeh.antennapod.net.download.service.R;
-import de.danoeh.antennapod.storage.database.DBWriter;
 import de.danoeh.antennapod.ui.notifications.NotificationUtils;
 import de.danoeh.antennapod.ui.transcript.TranscriptUtils;
 
 public final class AdSegmentDetectionPipeline {
     private static final String TAG = "AdSegmentPipeline";
-    private static final ExecutorService analysisExecutor = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r);
-        t.setName("AdSegmentAnalysis");
-        t.setPriority(Thread.MIN_PRIORITY);
-        return t;
-    });
 
     private AdSegmentDetectionPipeline() {
     }
 
     public static void detectAsync(Context context, FeedMedia media) {
-        analysisExecutor.submit(() -> {
-            try {
-                List<AdSegment> segments = detect(context, media);
-                DBWriter.setAdSegments(media.getItemId(), segments);
-                if (media.getItem() != null) {
-                    EventBus.getDefault().post(
-                            new FeedItemEvent(Collections.singletonList(media.getItem()), false));
-                }
-            } catch (Exception e) {
-                Log.e(TAG, "Ad segment detection failed", e);
-            } finally {
-                EventBus.getDefault().post(AdAnalysisProgressEvent.done(media.getItemId()));
-                NotificationManagerCompat.from(context).cancel(R.id.notification_ad_analysis);
-            }
-        });
+        AdDetectionWorker.enqueue(context, media);
     }
 
     public static List<AdSegment> detect(Context context, FeedMedia media) {
