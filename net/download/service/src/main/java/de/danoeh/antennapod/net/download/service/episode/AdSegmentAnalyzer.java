@@ -16,6 +16,8 @@ public class AdSegmentAnalyzer {
     static final long MIN_EPISODE_MS = 5 * 60 * 1000;
     static final double BOUNDARY_THRESHOLD = 1.3;
     static final double DISTINCTNESS_THRESHOLD = 0.7;
+    static final double STRONG_BOUNDARY_THRESHOLD = 2.75;
+    static final double RELAXED_DISTINCTNESS_THRESHOLD = 0.1;
     static final long MERGE_ADJACENT_MS = 10000;
 
     private final List<double[]> windows = new ArrayList<>();
@@ -217,12 +219,16 @@ public class AdSegmentAnalyzer {
                     break;
                 }
                 double distinctness = interiorDistinctness(deviations, start, end, numFeatures);
-                if (distinctness < DISTINCTNESS_THRESHOLD) {
+                boolean strongPair = smoothed[start] >= STRONG_BOUNDARY_THRESHOLD
+                        && smoothed[end] >= STRONG_BOUNDARY_THRESHOLD;
+                if (distinctness < (strongPair ? RELAXED_DISTINCTNESS_THRESHOLD : DISTINCTNESS_THRESHOLD)) {
                     continue;
                 }
                 double quality = distinctness * 2 + (smoothed[start] + smoothed[end]) * 0.25
                         + Math.log(end - start) * 0.3;
-                candidates.add(new double[]{start, end, quality, distinctness});
+                double rankedDistinctness = strongPair
+                        ? Math.max(distinctness, (smoothed[start] + smoothed[end]) / 8) : distinctness;
+                candidates.add(new double[]{start, end, quality, rankedDistinctness});
             }
         }
         return candidates;
